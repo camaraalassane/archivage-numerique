@@ -3,6 +3,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Archive;
 use App\Models\Dossier;
 use App\Models\DossierAnnee;
 use App\Models\DossierMois;
@@ -17,7 +18,6 @@ class DossierController extends Controller
     {
         $user = Auth::user();
 
-        // Vérifier les permissions
         if (!$user->canManageDossiers()) {
             abort(403, 'Vous n\'avez pas les droits pour gérer les dossiers.');
         }
@@ -34,6 +34,67 @@ class DossierController extends Controller
         ]);
     }
 
+    /**
+     * Charge les archives d'un dossier de façon asynchrone (appelé par le Dashboard et la page Dossiers).
+     * Supporte la pagination, le filtre par statut et la recherche.
+     */
+    public function archives(Request $request, Dossier $dossier)
+    {
+        $user = Auth::user();
+
+        $query = Archive::with([
+            'createur:id,name',
+            'validateur:id,name',
+        ])
+            ->where('dossier_id', $dossier->id);
+
+        // Archiviste et Division : uniquement les archives validées
+        if ($user->isArchiviste() || $user->isDivision()) {
+            $query->where('validation_status', Archive::STATUS_VALIDATED);
+        }
+
+        // Filtre par statut
+        if ($request->status && $request->status !== 'all') {
+            $query->where('validation_status', $request->status);
+        }
+
+        // Recherche
+        if ($request->search) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('titre', 'LIKE', "%{$search}%")
+                    ->orWhere('reference', 'LIKE', "%{$search}%")
+                    ->orWhere('mots_cles', 'LIKE', "%{$search}%");
+            });
+        }
+
+        $perPage = $request->per_page ?? 20;
+        $archives = $query->latest('date_document')->paginate($perPage);
+
+        // Transformer pour le frontend
+        $archives->getCollection()->transform(function ($archive) use ($user) {
+            return [
+                'id' => $archive->id,
+                'titre' => $archive->titre,
+                'reference' => $archive->reference,
+                'date_document' => $archive->date_document,
+                'type_document' => $archive->type_document,
+                'fichier_taille' => $archive->fichier_taille,
+                'validation_status' => $archive->validation_status,
+                'created_by' => $archive->created_by,
+                'createur' => $archive->createur?->name ?? 'Inconnu',
+                'validateur' => $archive->validateur?->name ?? null,
+                'mots_cles' => $archive->mots_cles,
+                'description' => $archive->description,
+                'can_modifier' => $user->isAdmin() || $user->isGestionnaire()
+                    || ($user->isArchiviste() && $archive->created_by === $user->id),
+                'can_telecharger' => true,
+            ];
+        });
+
+        return response()->json($archives);
+    }
+
     public function store(Request $request)
     {
         try {
@@ -42,8 +103,6 @@ class DossierController extends Controller
             if (!$user->canManageDossiers()) {
                 abort(403, 'Vous n\'avez pas les droits pour créer des dossiers.');
             }
-
-            \Log::info('📥 store appelé', ['data' => $request->all()]);
 
             $validated = $request->validate([
                 'mois_id' => 'required|exists:dossier_mois,id',
@@ -55,8 +114,6 @@ class DossierController extends Controller
                 'active' => 'boolean',
             ]);
 
-            \Log::info('✅ Validation store réussie');
-
             $mois = DossierMois::with('annee')->find($validated['mois_id']);
             if ($mois && $mois->annee && $mois->annee->cloturee) {
                 return redirect()->back()->with('error', 'Impossible : cette année est clôturée.');
@@ -66,10 +123,7 @@ class DossierController extends Controller
 
             return redirect()->back()->with('success', 'Dossier créé avec succès !');
         } catch (\Exception $e) {
-            \Log::error('❌ Erreur store:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            \Log::error('❌ Erreur store:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur: ' . $e->getMessage());
         }
     }
@@ -83,8 +137,6 @@ class DossierController extends Controller
                 abort(403, 'Vous n\'avez pas les droits pour créer des dossiers en lot.');
             }
 
-            \Log::info('📥 storeMultiple appelé', ['data' => $request->all()]);
-
             $validated = $request->validate([
                 'mois_id' => 'required|exists:dossier_mois,id',
                 'dossiers' => 'required|array|min:1',
@@ -95,8 +147,6 @@ class DossierController extends Controller
                 'description' => 'nullable|string',
                 'active' => 'boolean',
             ]);
-
-            \Log::info('✅ Validation storeMultiple réussie');
 
             $moisItem = DossierMois::with('annee')->findOrFail($request->mois_id);
 
@@ -158,31 +208,17 @@ class DossierController extends Controller
             }
 
             $message = $createdCount . ' dossier(s) créé(s) avec succès';
-            if ($existingCount > 0) {
-                $message .= '. ' . $existingCount . ' dossier(s) existant(s) ignoré(s)';
-            }
-            if (!empty($errors)) {
-                $message .= '. Erreurs: ' . implode(', ', $errors);
-            }
-
-            if ($createdCount === 0 && $existingCount === 0 && empty($errors)) {
-                return redirect()->back()->with('error', 'Aucun dossier n\'a pu être créé.');
-            }
+            if ($existingCount > 0) $message .= '. ' . $existingCount . ' dossier(s) existant(s) ignoré(s)';
+            if (!empty($errors)) $message .= '. Erreurs: ' . implode(', ', $errors);
 
             return redirect()->back()->with(
                 $createdCount > 0 ? 'success' : 'warning',
                 $message
             );
-
         } catch (\Illuminate\Validation\ValidationException $e) {
-            \Log::error('❌ Erreur de validation storeMultiple:', ['errors' => $e->errors()]);
             return redirect()->back()->withErrors($e->errors())->withInput();
         } catch (\Exception $e) {
-            \Log::error('❌ Erreur storeMultiple:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
+            \Log::error('❌ Erreur storeMultiple:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur serveur: ' . $e->getMessage());
         }
     }
@@ -215,10 +251,7 @@ class DossierController extends Controller
 
             return redirect()->back()->with('success', 'Dossier mis à jour avec succès !');
         } catch (\Exception $e) {
-            \Log::error('❌ Erreur update:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            \Log::error('❌ Erreur update:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur: ' . $e->getMessage());
         }
     }
@@ -239,10 +272,7 @@ class DossierController extends Controller
             $dossier->delete();
             return redirect()->back()->with('success', 'Dossier supprimé avec succès.');
         } catch (\Exception $e) {
-            \Log::error('❌ Erreur destroy:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            \Log::error('❌ Erreur destroy:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur: ' . $e->getMessage());
         }
     }
@@ -271,10 +301,7 @@ class DossierController extends Controller
 
             return redirect()->back()->with('success', 'Statut mis à jour avec succès');
         } catch (\Exception $e) {
-            \Log::error('❌ Erreur toggle:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            \Log::error('❌ Erreur toggle:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur: ' . $e->getMessage());
         }
     }
@@ -289,7 +316,7 @@ class DossierController extends Controller
             $query->where('nom', 'LIKE', '%' . $request->search . '%');
         }
 
-        $dossiers = $query->get()->map(function($dossier) {
+        $dossiers = $query->get()->map(function ($dossier) {
             return [
                 'id' => $dossier->id,
                 'nom' => $dossier->nom,

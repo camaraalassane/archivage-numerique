@@ -85,6 +85,56 @@ class Archive extends Model
         return $this->isPending();
     }
 
+    // ==============================================
+    // === PERMISSIONS DE VISUALISATION ET TÉLÉCHARGEMENT ===
+    // ==============================================
+
+    /**
+     * Vérifie si un utilisateur peut visualiser cette archive
+     */
+    public function canBeViewedBy(User $user): bool
+    {
+        // Admin et Gestionnaire peuvent tout voir
+        if ($user->isAdmin() || $user->isGestionnaire()) {
+            return true;
+        }
+
+        // Archiviste peut voir ses propres fichiers
+        if ($user->isArchiviste()) {
+            return $this->created_by === $user->id;
+        }
+
+        // Division peut voir les fichiers validés
+        if ($user->isDivision()) {
+            return $this->isValidated();
+        }
+
+        return false;
+    }
+
+    /**
+     * Vérifie si un utilisateur peut télécharger cette archive
+     */
+    public function canBeDownloadedBy(User $user): bool
+    {
+        // Admin et Gestionnaire peuvent toujours télécharger
+        if ($user->isAdmin() || $user->isGestionnaire()) {
+            return true;
+        }
+
+        // Archiviste peut télécharger ses propres fichiers validés
+        if ($user->isArchiviste()) {
+            return $this->created_by === $user->id && $this->isValidated();
+        }
+
+        // Division peut seulement télécharger les fichiers validés
+        if ($user->isDivision()) {
+            return $this->isValidated();
+        }
+
+        return false;
+    }
+
     // === ACCESSEURS ===
     public function getStatusLabelAttribute(): string
     {

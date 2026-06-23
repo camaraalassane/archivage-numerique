@@ -73,12 +73,14 @@ const editingId = ref(null);
 const multipleMode = ref(false);
 const folderMode = ref(false);
 
+// Filtres
 const search = ref(props.filters?.search || '');
 const filterDossier = ref(props.filters?.dossier_id || null);
 const filterType = ref(props.filters?.type || null);
 const filterDateDebut = ref(props.filters?.date_debut || null);
 const filterDateFin = ref(props.filters?.date_fin || null);
 
+// État du formulaire
 const selectedAnneeId = ref(null);
 const selectedMoisId = ref(null);
 const availableMois = ref([]);
@@ -97,6 +99,7 @@ const form = useForm({
     fichiers: [],
 });
 
+// === OPTIMISATION : Générer une base épurée et courte (Maximum 25 caractères) ===
 const generateReference = () => {
     if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) return '';
 
@@ -106,10 +109,11 @@ const generateReference = () => {
 
     if (!annee || !moisItem || !dossier) return '';
 
-    const count = props.archives.data?.filter(a => a.dossier_id === form.dossier_id).length || 0;
-    const nextNum = String(count + 1).padStart(3, '0');
+    const dossierClean = dossier.nom.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    const rawBase = `${annee.annee}_${String(moisItem.mois).padStart(2, '0')}_${dossierClean}`;
 
-    return `${annee.annee}_${String(moisItem.mois).padStart(2, '0')}_${dossier.nom.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_${nextNum}`;
+    // On tronque à 25 caractères pour laisser au contrôleur Laravel le soin d'injecter l'unicité
+    return rawBase.substr(0, 25);
 };
 
 const updateReference = () => {
@@ -118,6 +122,7 @@ const updateReference = () => {
     }
 };
 
+// Watchers
 watch(selectedAnneeId, (newAnneeId) => {
     if (newAnneeId) {
         availableMois.value = props.mois.filter(m => m.annee_id === newAnneeId);
@@ -148,6 +153,7 @@ watch([selectedAnneeId, selectedMoisId, () => form.dossier_id], () => {
     updateReference();
 });
 
+// Recherche avec debounce
 const updateSearch = debounce(() => {
     router.get(route('archives.index'), {
         search: search.value,
@@ -275,7 +281,7 @@ const onFolderSelect = (event) => {
         }));
 
         const totalSize = folderFiles.value.reduce((acc, f) => acc + f.size, 0);
-        showNotify(`📁 ${folderFiles.value.length} fichier(s) selectionne(s) - Taille: ${(totalSize / 1024 / 1024).toFixed(2)} Mo`, 'info');
+        showNotify(`📁 ${folderFiles.value.length} fichier(s) sélectionné(s) - Taille: ${(totalSize / 1024 / 1024).toFixed(2)} Mo`, 'info');
     }
 };
 
@@ -298,34 +304,55 @@ const toggleFolderMode = () => {
     }
 };
 
+// === LOGIQUE DE SOUMISSION NETTOYÉE ===
 const submit = () => {
+    console.log('🚀 submit appelé', { isEditing: isEditing.value, multipleMode: multipleMode.value });
+
+    if (form.processing) return;
+
+    // --- MODE ÉDITION ---
     if (isEditing.value) {
         form.put(route('archives.update', editingId.value), {
             onSuccess: () => {
                 dialog.value = false;
-                form.reset();
-                selectedAnneeId.value = null;
-                selectedMoisId.value = null;
+                resetForm();
                 showNotify('Document mis à jour avec succès', 'success');
             },
-            onError: () => showNotify('Erreur lors de la mise à jour', 'error')
+            onError: (errors) => {
+                console.error('Erreur:', errors);
+                showNotify('Erreur lors de la mise à jour', 'error');
+            },
+            preserveScroll: true
         });
         return;
     }
 
+    // --- MODE MULTIPLE / DOSSIER ---
     if (multipleMode.value || folderMode.value) {
         if (!form.fichiers || form.fichiers.length === 0) {
-            showNotify('Veuillez selectionner des fichiers', 'error');
+            showNotify('Veuillez sélectionner des fichiers', 'error');
             return;
         }
 
-        router.post(route('archives.store.multiple'), {
-            dossier_id: form.dossier_id,
-            date_document: form.date_document,
-            description: form.description,
-            mots_cles: form.mots_cles,
-            fichiers: form.fichiers,
-        }, {
+        if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) {
+            showNotify('Veuillez sélectionner une année, un mois et un dossier', 'error');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('dossier_id', form.dossier_id);
+        formData.append('date_document', form.date_document);
+        formData.append('description', form.description || '');
+        formData.append('mots_cles', form.mots_cles || '');
+
+        const baseRef = generateReference();
+
+        form.fichiers.forEach((file, index) => {
+            formData.append(`fichiers[${index}]`, file);
+            formData.append(`references[${index}]`, baseRef);
+        });
+
+        router.post(route('archives.store.multiple'), formData, {
             forceFormData: true,
             onSuccess: () => {
                 dialog.value = false;
@@ -336,26 +363,54 @@ const submit = () => {
                 folderFilesInfo.value = [];
                 selectedAnneeId.value = null;
                 selectedMoisId.value = null;
-                showNotify(`${form.fichiers?.length || 0} fichier(s) archives avec succes`, 'success');
+                showNotify('Fichiers archivés avec succès', 'success');
             },
-            onError: () => showNotify('Erreur lors de l\'archivage', 'error')
+            onError: (errors) => {
+                showNotify('Erreur lors de l\'archivage multiple', 'error');
+            }
         });
         return;
     }
 
-    if (!form.reference && selectedAnneeId.value && selectedMoisId.value && form.dossier_id) {
-        form.reference = generateReference();
+    // --- MODE CRÉATION UNIQUE ---
+    if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) {
+        showNotify('Veuillez sélectionner une année, un mois et un dossier', 'error');
+        return;
     }
+
+    if (!form.titre || !form.fichier) {
+        showNotify('Veuillez remplir les champs obligatoires (Titre et Fichier)', 'error');
+        return;
+    }
+
+    // On passe simplement la base épurée calculée
+    form.reference = generateReference();
+
     form.post(route('archives.store'), {
         onSuccess: () => {
             dialog.value = false;
             form.reset();
             selectedAnneeId.value = null;
             selectedMoisId.value = null;
-            showNotify('Document archive avec succes', 'success');
+            showNotify('Document archivé avec succès', 'success');
         },
-        onError: () => showNotify('Erreur lors de l\'archivage', 'error')
+        onError: (errors) => {
+            console.error(errors);
+            showNotify('Erreur lors de l\'archivage', 'error');
+        },
+        preserveScroll: true
     });
+};
+
+const resetForm = () => {
+    form.reset();
+    form.clearErrors();
+    multipleMode.value = false;
+    folderMode.value = false;
+    isEditing.value = false;
+    editingId.value = null;
+    selectedAnneeId.value = null;
+    selectedMoisId.value = null;
 };
 
 const deleteArchive = (id) => {
@@ -363,10 +418,10 @@ const deleteArchive = (id) => {
         showNotify('Vous n\'avez pas les droits pour supprimer ce document.', 'error');
         return;
     }
-    showConfirm('Supprimer definitivement ce document ?', () => {
+    showConfirm('Supprimer définitivement ce document ?', () => {
         router.delete(route('archives.destroy', id), {
             onSuccess: () => {
-                showNotify('Document supprime avec succes', 'success');
+                showNotify('Document supprimé avec succès', 'success');
             },
             onError: () => showNotify('Erreur lors de la suppression', 'error')
         });
@@ -388,7 +443,7 @@ const getDossierPath = (archive) => {
     return `${archive.dossier.mois?.annee?.annee || ''} / ${archive.dossier.mois?.nom_mois || ''} / ${archive.dossier.nom}`;
 };
 
-const noDataMessage = isArchiviste.value ? 'Aucun document archive par vos soins.' : 'Aucun document ne correspond a vos criteres.';
+const noDataMessage = isArchiviste.value ? 'Aucun document archivé par vos soins.' : 'Aucun document ne correspond à vos critères.';
 
 const formatDate = (date) => {
     if (!date) return '-';
@@ -464,6 +519,7 @@ const formatSize = (bytes) => {
                     @click="openCreateDialog">Nouveau</v-btn>
             </v-toolbar>
 
+            <!-- FILTRES -->
             <div class="bg-grey-lighten-4 px-4 py-2 border-bottom d-flex align-center flex-wrap gap-3">
                 <v-select v-model="filterDossier" :items="dossiers" item-title="nom" item-value="id" label="Dossier"
                     variant="solo" density="compact" hide-details flat clearable style="max-width: 250px;"></v-select>
@@ -477,6 +533,7 @@ const formatSize = (bytes) => {
                     size="small" @click="resetFilters" prepend-icon="mdi-filter-off">Reinitialiser</v-btn>
             </div>
 
+            <!-- TABLEAU -->
             <div class="flex-grow-1 overflow-hidden bg-white">
                 <v-table fixed-header class="h-100">
                     <thead>
@@ -504,10 +561,8 @@ const formatSize = (bytes) => {
                                     :href="route('archives.view', archive.id)" target="_blank"></v-btn>
                                 <v-btn icon="mdi-download" variant="text" color="primary"
                                     :href="route('archives.download', archive.id)"></v-btn>
-                                <!-- Modifier : Archiviste, Gestionnaire et Admin -->
                                 <v-btn v-if="canEdit" icon="mdi-pencil" variant="text" color="primary"
                                     @click="openEditDialog(archive)"></v-btn>
-                                <!-- Supprimer : Gestionnaire et Admin uniquement -->
                                 <v-btn v-if="canDelete" icon="mdi-delete" variant="text" color="error"
                                     @click="deleteArchive(archive.id)"></v-btn>
                             </td>
@@ -519,10 +574,11 @@ const formatSize = (bytes) => {
                 </v-table>
             </div>
 
+            <!-- PAGINATION -->
             <v-divider></v-divider>
             <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between">
                 <div class="text-caption text-grey-darken-1">Affichage de {{ archives.from || 0 }} à {{ archives.to || 0
-                }} sur {{ archives.total }} documents</div>
+                    }} sur {{ archives.total }} documents</div>
                 <div class="d-flex gap-1">
                     <v-btn v-for="(link, k) in archives.links" :key="k" :disabled="link.url === null"
                         :variant="link.active ? 'flat' : 'text'" :color="link.active ? 'primary' : 'grey-darken-1'"
@@ -553,6 +609,7 @@ const formatSize = (bytes) => {
                         height="4" striped class="mb-4" rounded></v-progress-linear>
 
                     <v-form @submit.prevent="submit">
+                        <!-- Emplacement -->
                         <div class="mb-4">
                             <div class="text-subtitle-2 font-weight-bold mb-2 text-primary">Emplacement du document
                             </div>
@@ -596,6 +653,7 @@ const formatSize = (bytes) => {
 
                         <v-divider class="my-4"></v-divider>
 
+                        <!-- Mode d'importation -->
                         <div v-if="!isEditing" class="mb-4">
                             <div class="text-subtitle-2 font-weight-bold mb-2 text-primary">Mode d'importation</div>
                             <v-radio-group v-model="multipleMode" color="primary" hide-details>
@@ -621,17 +679,20 @@ const formatSize = (bytes) => {
 
                         <v-divider class="my-4" v-if="!isEditing"></v-divider>
 
+                        <!-- Informations du document -->
                         <div class="text-subtitle-2 font-weight-bold mb-2 text-primary">Informations du document</div>
 
                         <v-row dense>
                             <template v-if="!multipleMode">
                                 <v-col cols="12" md="6">
-                                    <v-text-field v-model="form.reference" label="Reference (auto-generee)"
-                                        variant="outlined" density="comfortable" :error-messages="form.errors.reference"
-                                        readonly disabled hint="La reference est generee automatiquement"
+                                    <v-text-field v-model="form.reference"
+                                        label="Reference (auto-generee avec timestamp)" variant="outlined"
+                                        density="comfortable" :error-messages="form.errors.reference" readonly disabled
+                                        hint="La reference est generee automatiquement avec un timestamp pour garantir l'unicite"
                                         persistent-hint>
-                                        <template v-slot:prepend-inner><v-icon color="primary"
-                                                size="small">mdi-tag</v-icon></template>
+                                        <template v-slot:prepend-inner>
+                                            <v-icon color="primary" size="small">mdi-tag</v-icon>
+                                        </template>
                                     </v-text-field>
                                 </v-col>
                                 <v-col cols="12" md="6">
@@ -732,7 +793,7 @@ const formatSize = (bytes) => {
                                     <template v-slot:selection="{ fileNames }">
                                         <template v-for="fileName in fileNames" :key="fileName">
                                             <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
-                                            }}</v-chip>
+                                                }}</v-chip>
                                         </template>
                                     </template>
                                 </v-file-input>

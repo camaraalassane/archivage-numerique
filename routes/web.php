@@ -24,11 +24,9 @@ Route::get('/', function () {
 // ROUTES ACCESSIBLES À TOUS LES UTILISATEURS CONNECTÉS
 // ============================================
 Route::middleware(['auth', 'verified'])->group(function () {
-    // Dashboard - accessible à tous
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/dashboard/search', [DashboardController::class, 'search'])->name('dashboard.search');
 
-    // Profil - accessible à tous
     Route::controller(ProfileController::class)->group(function () {
         Route::get('/profile', 'edit')->name('profile.edit');
         Route::patch('/profile', 'update')->name('profile.update');
@@ -41,14 +39,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/stats', [StatsController::class, 'index'])->name('stats');
         });
 
-    // === ROUTES DE VISUALISATION ET TÉLÉCHARGEMENT ACCESSIBLES À TOUS ===
-    // Division peut aussi visualiser et télécharger
+    // Visualisation et téléchargement : accessibles à TOUS les connectés (y compris Division)
     Route::get('/archives/{archive}/view', [ArchiveController::class, 'viewFile'])->name('archives.view');
     Route::get('/archives/{archive}/download', [ArchiveController::class, 'download'])->name('archives.download');
 
-    // Route AJAX pour charger les archives d'un dossier
-    Route::get('/dossiers/{dossier}/archives', [DashboardController::class, 'getDossierArchives'])
-        ->name('dossiers.archives');
+    // Route AJAX pour charger les archives d'un dossier (Dashboard)
+    Route::get('/dossiers/{dossier}/archives', [DossierController::class, 'archives'])->name('dossiers.archives');
 });
 
 // ============================================
@@ -56,20 +52,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
 // ============================================
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN])
     ->group(function () {
+        // IMPORTANT : les routes statiques avant les routes dynamiques {archive}
+        Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
+        Route::post('/archives/bulk', [ArchiveController::class, 'storeMultiple'])->name('archives.store.multiple');
 
-        // --- ARCHIVES (gestion) ---
+        // Routes CRUD pour les archives
         Route::get('/archives', [ArchiveController::class, 'index'])->name('archives.index');
         Route::post('/archives', [ArchiveController::class, 'store'])->name('archives.store');
-        Route::post('/archives/bulk', [ArchiveController::class, 'storeMultiple'])->name('archives.store.multiple');
         Route::put('/archives/{archive}', [ArchiveController::class, 'update'])->name('archives.update');
+        Route::delete('/archives/{archive}', [ArchiveController::class, 'destroy'])->name('archives.destroy');
         Route::post('/archives/{archive}/favorite', [ArchiveController::class, 'toggleFavorite'])->name('archives.favorite');
         Route::post('/archives/{archive}/version', [ArchiveController::class, 'newVersion'])->name('archives.new_version');
 
-        // Suppression : uniquement Gestionnaire et Admin (géré dans le contrôleur)
-        Route::delete('/archives/{archive}', [ArchiveController::class, 'destroy'])->name('archives.destroy');
-
-        // Export : uniquement Gestionnaire et Admin (géré dans le contrôleur)
-        Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
+        // ⚠️ SUPPRIMER LES ROUTES view ET download D'ICI (elles sont déjà dans le groupe auth, verified)
+        // Route::get('/archives/{archive}/view', [ArchiveController::class, 'viewFile'])->name('archives.view');
+        // Route::get('/archives/{archive}/download', [ArchiveController::class, 'download'])->name('archives.download');
 });
 
 // ============================================
@@ -77,17 +74,16 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . U
 // ============================================
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN])
     ->group(function () {
-
         // --- VALIDATION DES ARCHIVES ---
         Route::post('/archives/{archive}/validate', [ArchiveController::class, 'validateArchive'])
             ->name('archives.validate');
 
         // --- GESTION DES DOSSIERS ---
+        Route::post('dossiers/store-multiple', [DossierController::class, 'storeMultiple'])->name('dossiers.store.multiple');
+        Route::get('dossiers/list', [DossierController::class, 'list'])->name('dossiers.list');
         Route::resource('dossiers', DossierController::class)->except(['show']);
         Route::get('mois/{mois}/dossiers', [DossierController::class, 'byMois'])->name('dossiers.by_mois');
         Route::post('dossiers/{dossier}/toggle', [DossierController::class, 'toggle'])->name('dossiers.toggle');
-        Route::post('dossiers/store-multiple', [DossierController::class, 'storeMultiple'])->name('dossiers.store.multiple');
-        Route::get('/dossiers/list', [DossierController::class, 'list'])->name('dossiers.list');
 });
 
 // ============================================
@@ -95,7 +91,6 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE . ',' .
 // ============================================
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ADMIN])
     ->group(function () {
-
         // --- GESTION DES UTILISATEURS ---
         Route::resource('users', UserController::class)->except(['show', 'create', 'store']);
         Route::get('/users', [UserController::class, 'index'])->name('users.index');
@@ -126,19 +121,15 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE])
     ->group(function () {
         Route::get('/archiviste/pending-rejected', [ArchivisteController::class, 'pendingRejected'])
             ->name('archiviste.pending-rejected');
-
         Route::put('/archiviste/{archive}', [ArchivisteController::class, 'update'])
             ->name('archiviste.update');
-
         Route::delete('/archiviste/{archive}', [ArchivisteController::class, 'destroy'])
             ->name('archiviste.destroy');
-
         Route::get('/archiviste/{archive}/download', [ArchivisteController::class, 'download'])
             ->name('archiviste.download');
-
         Route::get('/archiviste/{archive}/view', [ArchivisteController::class, 'viewFile'])
             ->name('archiviste.view');
-});
+    });
 
 // ============================================
 // ROUTES ACCESSIBLES UNIQUEMENT À GESTIONNAIRE (RÔLE 2)
@@ -147,16 +138,12 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
     ->group(function () {
         Route::get('/gestionnaire/pending-archives', [GestionnaireController::class, 'pendingArchives'])
             ->name('gestionnaire.pending-archives');
-
         Route::post('/gestionnaire/{archive}/validate', [GestionnaireController::class, 'validate'])
             ->name('gestionnaire.validate');
-
         Route::post('/gestionnaire/{archive}/reject', [GestionnaireController::class, 'reject'])
             ->name('gestionnaire.reject');
-
         Route::get('/gestionnaire/{archive}/view', [GestionnaireController::class, 'viewFile'])
             ->name('gestionnaire.view');
-
         Route::get('/gestionnaire/{archive}/download', [GestionnaireController::class, 'download'])
             ->name('gestionnaire.download');
 });
