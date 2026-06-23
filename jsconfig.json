@@ -1,0 +1,30 @@
+{
+    "compilerOptions": {
+        "baseUrl": ".",
+        "ignoreDeprecations": "6.0",
+        "paths": {
+            "@/*": ["./resources/js/*"],
+            "@pages/*": ["./resources/js/Pages/*"],
+            "@components/*": ["./resources/js/Components/*"],
+            "@layouts/*": ["./resources/js/Layouts/*"]
+        },
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "Node",
+        "jsx": "preserve",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true
+    },
+    "include": [
+        "resources/js/**/*",
+        "vendor/laravel/breeze/stubs/inertia-vue/resources/js/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "public",
+        "storage",
+        "bootstrap/cache"
+    ]
+}
