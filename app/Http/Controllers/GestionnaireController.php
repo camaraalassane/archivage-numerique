@@ -23,7 +23,6 @@ class GestionnaireController extends Controller
     {
         $user = Auth::user();
 
-        // Seul le Gestionnaire peut accéder à cette page
         if (!$user->isGestionnaire()) {
             abort(403, 'Vous n\'avez pas les droits pour accéder à cette page.');
         }
@@ -31,7 +30,6 @@ class GestionnaireController extends Controller
         $query = Archive::with(['dossier.mois.annee', 'createur', 'validateur'])
             ->where('validation_status', Archive::STATUS_PENDING);
 
-        // === FILTRES DE RECHERCHE ===
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($sub) use ($search) {
                 $sub->where('titre', 'like', "%{$search}%")
@@ -103,6 +101,137 @@ class GestionnaireController extends Controller
         ]);
 
         return redirect()->back()->with('success', 'Archive rejetée avec succès.');
+    }
+
+    /**
+     * 🔥 VALIDER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
+     */
+    public function validateAll(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!$user->isGestionnaire()) {
+            abort(403, 'Vous n\'avez pas les droits pour effectuer cette action.');
+        }
+
+        $request->validate([
+            'archiviste_id' => 'nullable|integer|exists:users,id',
+            'ids' => 'nullable|array',
+            'ids.*' => 'integer|exists:archives,id',
+        ]);
+
+        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
+
+        if ($request->filled('ids') && count($request->ids) > 0) {
+            $query->whereIn('id', $request->ids);
+        } elseif ($request->filled('archiviste_id')) {
+            $query->where('created_by', $request->archiviste_id);
+        } else {
+            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
+        }
+
+        $count = $query->count();
+
+        if ($count === 0) {
+            return redirect()->back()->with('error', 'Aucune archive en attente à valider.');
+        }
+
+        $query->update([
+            'validation_status' => Archive::STATUS_VALIDATED,
+            'validated_by' => $user->id,
+            'validated_at' => now(),
+            'validation_comment' => 'Validé en masse par le gestionnaire',
+        ]);
+
+        return redirect()->back()->with('success', "{$count} archive(s) validée(s) avec succès.");
+    }
+
+    /**
+     * 🔥 REJETER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
+     */
+    public function rejectAll(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!$user->isGestionnaire()) {
+            abort(403, 'Vous n\'avez pas les droits pour effectuer cette action.');
+        }
+
+        $request->validate([
+            'archiviste_id' => 'nullable|integer|exists:users,id',
+            'ids' => 'nullable|array',
+            'ids.*' => 'integer|exists:archives,id',
+            'comment' => 'nullable|string|max:500',
+        ]);
+
+        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
+
+        if ($request->filled('ids') && count($request->ids) > 0) {
+            $query->whereIn('id', $request->ids);
+        } elseif ($request->filled('archiviste_id')) {
+            $query->where('created_by', $request->archiviste_id);
+        } else {
+            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
+        }
+
+        $count = $query->count();
+
+        if ($count === 0) {
+            return redirect()->back()->with('error', 'Aucune archive en attente à rejeter.');
+        }
+
+        $query->update([
+            'validation_status' => Archive::STATUS_REJECTED,
+            'validated_by' => $user->id,
+            'validated_at' => now(),
+            'validation_comment' => $request->comment ?? 'Rejeté en masse par le gestionnaire',
+        ]);
+
+        return redirect()->back()->with('success', "{$count} archive(s) rejetée(s).");
+    }
+
+    /**
+     * 🔥 SUPPRIMER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
+     */
+    public function destroyAll(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!$user->isGestionnaire()) {
+            abort(403, 'Vous n\'avez pas les droits pour effectuer cette action.');
+        }
+
+        $request->validate([
+            'archiviste_id' => 'nullable|integer|exists:users,id',
+            'ids' => 'nullable|array',
+            'ids.*' => 'integer|exists:archives,id',
+        ]);
+
+        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
+
+        if ($request->filled('ids') && count($request->ids) > 0) {
+            $query->whereIn('id', $request->ids);
+        } elseif ($request->filled('archiviste_id')) {
+            $query->where('created_by', $request->archiviste_id);
+        } else {
+            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
+        }
+
+        $archives = $query->get();
+        $count = $archives->count();
+
+        if ($count === 0) {
+            return redirect()->back()->with('error', 'Aucune archive en attente à supprimer.');
+        }
+
+        foreach ($archives as $archive) {
+            if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
+                Storage::disk('public')->delete($archive->fichier_path);
+            }
+            $archive->delete();
+        }
+
+        return redirect()->back()->with('success', "{$count} archive(s) supprimée(s) avec succès.");
     }
 
     /**

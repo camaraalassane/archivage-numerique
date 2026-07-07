@@ -63,10 +63,6 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . U
         Route::delete('/archives/{archive}', [ArchiveController::class, 'destroy'])->name('archives.destroy');
         Route::post('/archives/{archive}/favorite', [ArchiveController::class, 'toggleFavorite'])->name('archives.favorite');
         Route::post('/archives/{archive}/version', [ArchiveController::class, 'newVersion'])->name('archives.new_version');
-
-        // ⚠️ SUPPRIMER LES ROUTES view ET download D'ICI (elles sont déjà dans le groupe auth, verified)
-        // Route::get('/archives/{archive}/view', [ArchiveController::class, 'viewFile'])->name('archives.view');
-        // Route::get('/archives/{archive}/download', [ArchiveController::class, 'download'])->name('archives.download');
 });
 
 // ============================================
@@ -136,16 +132,35 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE])
 // ============================================
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
     ->group(function () {
+        // Page principale
         Route::get('/gestionnaire/pending-archives', [GestionnaireController::class, 'pendingArchives'])
             ->name('gestionnaire.pending-archives');
+
+        // 🔥 ACTIONS INDIVIDUELLES
         Route::post('/gestionnaire/{archive}/validate', [GestionnaireController::class, 'validate'])
             ->name('gestionnaire.validate');
         Route::post('/gestionnaire/{archive}/reject', [GestionnaireController::class, 'reject'])
             ->name('gestionnaire.reject');
+        Route::delete('/gestionnaire/{archive}', [GestionnaireController::class, 'destroy'])
+            ->name('gestionnaire.destroy');
+
+        // 🔥🔥 ACTIONS EN MASSE (NOUVEAU !) 🔥🔥
+        Route::post('/gestionnaire/validate-all', [GestionnaireController::class, 'validateAll'])
+            ->name('gestionnaire.validate-all');
+        Route::post('/gestionnaire/reject-all', [GestionnaireController::class, 'rejectAll'])
+            ->name('gestionnaire.reject-all');
+        Route::post('/gestionnaire/destroy-all', [GestionnaireController::class, 'destroyAll'])
+            ->name('gestionnaire.destroy-all');
+
+        // Visualisation et téléchargement
         Route::get('/gestionnaire/{archive}/view', [GestionnaireController::class, 'viewFile'])
             ->name('gestionnaire.view');
         Route::get('/gestionnaire/{archive}/download', [GestionnaireController::class, 'download'])
             ->name('gestionnaire.download');
-});
+
+        // Statistiques (optionnel)
+        Route::get('/gestionnaire/stats', [GestionnaireController::class, 'stats'])
+            ->name('gestionnaire.stats');
+    });
 
 require __DIR__.'/auth.php';

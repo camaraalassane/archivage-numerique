@@ -14,6 +14,10 @@ const props = defineProps({
     user: { type: Object, required: true }
 });
 
+// 🔥 SELECTION EN MASSE
+const selectedIds = ref([]);
+const selectAll = ref(false);
+
 // SNACKBAR
 const snackbar = ref({
     show: false,
@@ -27,6 +31,27 @@ const showNotify = (text, color = 'success') => {
         snackbar.value.show = false;
     }, 4000);
 };
+
+// 🔥 GESTION DE LA SELECTION
+const toggleSelectAll = () => {
+    if (selectAll.value) {
+        selectedIds.value = props.archives.data.map(a => a.id);
+    } else {
+        selectedIds.value = [];
+    }
+};
+
+const toggleSelect = (id) => {
+    const index = selectedIds.value.indexOf(id);
+    if (index > -1) {
+        selectedIds.value.splice(index, 1);
+    } else {
+        selectedIds.value.push(id);
+    }
+    selectAll.value = selectedIds.value.length === props.archives.data.length;
+};
+
+const selectedCount = computed(() => selectedIds.value.length);
 
 // Filtres
 const search = ref(props.filters?.search || '');
@@ -85,7 +110,87 @@ const confirmReject = () => {
     });
 };
 
-// Validation
+// 🔥 ACTIONS EN MASSE
+const validateAll = () => {
+    if (selectedIds.value.length === 0) {
+        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
+        return;
+    }
+    showConfirm(
+        `Voulez-vous valider ${selectedIds.value.length} archive(s) ?`,
+        () => {
+            router.post(route('gestionnaire.validate-all'), {
+                ids: selectedIds.value
+            }, {
+                onSuccess: () => {
+                    showNotify(`${selectedIds.value.length} archive(s) validée(s) avec succès`, 'success');
+                    selectedIds.value = [];
+                    selectAll.value = false;
+                    router.reload({ only: ['archives'] });
+                },
+                onError: () => {
+                    showNotify('Erreur lors de la validation en masse', 'error');
+                }
+            });
+        },
+        'Valider en masse'
+    );
+};
+
+const rejectAll = () => {
+    if (selectedIds.value.length === 0) {
+        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
+        return;
+    }
+    showConfirm(
+        `Voulez-vous rejeter ${selectedIds.value.length} archive(s) ?`,
+        () => {
+            router.post(route('gestionnaire.reject-all'), {
+                ids: selectedIds.value,
+                comment: 'Rejeté en masse par le gestionnaire'
+            }, {
+                onSuccess: () => {
+                    showNotify(`${selectedIds.value.length} archive(s) rejetée(s)`, 'warning');
+                    selectedIds.value = [];
+                    selectAll.value = false;
+                    router.reload({ only: ['archives'] });
+                },
+                onError: () => {
+                    showNotify('Erreur lors du rejet en masse', 'error');
+                }
+            });
+        },
+        'Rejeter en masse'
+    );
+};
+
+const destroyAll = () => {
+    if (selectedIds.value.length === 0) {
+        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
+        return;
+    }
+    showConfirm(
+        `⚠️ Voulez-vous SUPPRIMER définitivement ${selectedIds.value.length} archive(s) ? Cette action est irréversible !`,
+        () => {
+            router.post(route('gestionnaire.destroy-all'), {
+                ids: selectedIds.value
+            }, {
+                onSuccess: () => {
+                    showNotify(`${selectedIds.value.length} archive(s) supprimée(s)`, 'error');
+                    selectedIds.value = [];
+                    selectAll.value = false;
+                    router.reload({ only: ['archives'] });
+                },
+                onError: () => {
+                    showNotify('Erreur lors de la suppression en masse', 'error');
+                }
+            });
+        },
+        '⚠️ Supprimer en masse'
+    );
+};
+
+// Validation individuelle
 const validateArchive = (archive) => {
     showConfirm('Voulez-vous valider cette archive ?', () => {
         router.post(route('gestionnaire.validate', archive.id), {
@@ -230,6 +335,27 @@ const getDossierPath = (archive) => {
                     variant="outlined" hide-details density="comfortable" style="max-width: 300px;"></v-text-field>
             </v-toolbar>
 
+            <!-- ACTIONS EN MASSE -->
+            <div v-if="selectedCount > 0"
+                class="bg-blue-lighten-5 px-4 py-2 border-bottom d-flex align-center flex-wrap gap-3">
+                <v-chip color="primary" size="small">
+                    <v-icon start size="small">mdi-check-all</v-icon>
+                    {{ selectedCount }} sélectionné(s)
+                </v-chip>
+                <v-btn color="success" size="small" variant="flat" @click="validateAll" prepend-icon="mdi-check-all">
+                    Valider tout
+                </v-btn>
+                <v-btn color="warning" size="small" variant="flat" @click="rejectAll" prepend-icon="mdi-close-circle">
+                    Rejeter tout
+                </v-btn>
+                <v-btn color="error" size="small" variant="flat" @click="destroyAll" prepend-icon="mdi-delete-sweep">
+                    Supprimer tout
+                </v-btn>
+                <v-btn variant="text" size="small" @click="selectedIds = []; selectAll = false">
+                    Désélectionner tout
+                </v-btn>
+            </div>
+
             <!-- FILTRES -->
             <div class="bg-grey-lighten-4 px-4 py-2 border-bottom d-flex align-center flex-wrap gap-3">
                 <v-select v-model="filterUser" :items="users" item-title="name" item-value="id" label="Archiviste"
@@ -264,8 +390,9 @@ const getDossierPath = (archive) => {
                         <v-icon start size="x-small">mdi-clock-outline</v-icon>
                         {{ archives.total || 0 }} archive(s)
                     </v-chip>
-                    <span class="text-caption text-grey ml-2">Dernière mise à jour : {{ new Date().toLocaleTimeString()
-                    }}</span>
+                    <span v-if="selectedCount > 0" class="text-caption text-primary">
+                        {{ selectedCount }} sélectionnée(s)
+                    </span>
                 </div>
             </div>
 
@@ -273,6 +400,10 @@ const getDossierPath = (archive) => {
             <v-table hover>
                 <thead>
                     <tr class="bg-grey-lighten-4">
+                        <th style="width:40px">
+                            <v-checkbox v-model="selectAll" @update:model-value="toggleSelectAll"
+                                hide-details></v-checkbox>
+                        </th>
                         <th class="text-overline">Référence</th>
                         <th class="text-overline">Titre</th>
                         <th class="text-overline">Archiviste</th>
@@ -283,7 +414,12 @@ const getDossierPath = (archive) => {
                     </tr>
                 </thead>
                 <tbody>
-                    <tr v-for="archive in archives.data" :key="archive.id">
+                    <tr v-for="archive in archives.data" :key="archive.id"
+                        :class="{ 'bg-blue-lighten-5': selectedIds.includes(archive.id) }">
+                        <td>
+                            <v-checkbox :model-value="selectedIds.includes(archive.id)"
+                                @update:model-value="toggleSelect(archive.id)" hide-details></v-checkbox>
+                        </td>
                         <td class="font-weight-bold text-primary">{{ archive.reference }}</td>
                         <td>{{ archive.titre }}</td>
                         <td>
@@ -318,7 +454,7 @@ const getDossierPath = (archive) => {
                         </td>
                     </tr>
                     <tr v-if="archives.data.length === 0">
-                        <td colspan="7" class="text-center py-12 text-grey">
+                        <td colspan="8" class="text-center py-12 text-grey">
                             <v-icon size="48" color="grey-lighten-2" class="mb-3">mdi-check-circle</v-icon>
                             <div class="text-h6 text-grey-lighten-1">Aucune archive en attente</div>
                             <div class="text-caption text-grey mt-2">Toutes les archives ont été traitées</div>
@@ -332,6 +468,9 @@ const getDossierPath = (archive) => {
             <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between">
                 <div class="text-caption text-grey-darken-1">
                     Affichage de {{ archives.from || 0 }} à {{ archives.to || 0 }} sur {{ archives.total }} archives
+                    <span v-if="selectedCount > 0" class="text-primary ml-2">
+                        ({{ selectedCount }} sélectionnée(s))
+                    </span>
                 </div>
                 <div class="d-flex gap-1">
                     <v-btn v-for="(link, k) in archives.links" :key="k" :disabled="link.url === null"
