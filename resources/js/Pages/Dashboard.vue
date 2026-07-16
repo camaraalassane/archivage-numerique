@@ -1,6 +1,6 @@
 <!-- resources/js/Pages/Dashboard.vue -->
 <script setup>
-import { ref, computed, reactive, watch } from 'vue';
+import { ref, computed, reactive, watch, onMounted } from 'vue';
 import { Head, useForm, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import axios from 'axios';
@@ -54,11 +54,13 @@ const history = ref([]);
 const searchQuery = ref('');
 const statusFilter = ref('all');
 
-// ÉTATS POUR LE CHARGEMENT ASYNCHRONE
+// ÉTATS POUR LE CHARGEMENT ASYNCHRONE AVEC PAGINATION
 const dossierArchives = ref([]);
 const isLoadingArchives = ref(false);
 const currentDossierId = ref(null);
 const archivesPagination = ref(null);
+const currentPage = ref(1);
+const perPage = ref(10);
 
 // ÉTATS DIALOGUES
 const uploadDialog = ref(false);
@@ -73,6 +75,11 @@ const multipleMode = ref(false);
 const folderMode = ref(false);
 const folderFiles = ref([]);
 const folderFilesInfo = ref([]);
+
+// 🔥 ÉTATS POUR LA DÉTECTION DES DOUBLONS
+const checkingDuplicate = ref(false);
+const duplicateWarning = ref(false);
+const duplicateFiles = ref([]);
 
 // PERMISSIONS
 const canArchive = computed(() => {
@@ -123,20 +130,7 @@ const filteredData = computed(() => {
         return mois?.dossiers?.filter(d => d.nom.toLowerCase().includes(q)) || [];
     }
     if (currentView.value === 'files') {
-        let files = dossierArchives.value;
-
-        if (q) {
-            files = files.filter(f =>
-                f.titre.toLowerCase().includes(q) ||
-                f.reference.toLowerCase().includes(q)
-            );
-        }
-
-        if (statusFilter.value !== 'all') {
-            files = files.filter(f => f.validation_status === statusFilter.value);
-        }
-
-        return files;
+        return dossierArchives.value;
     }
     return [];
 });
@@ -158,6 +152,7 @@ const enterAnnee = (annee) => {
     currentPath.value.annee = annee;
     currentView.value = 'mois';
     searchQuery.value = '';
+    currentPage.value = 1;
 };
 
 const enterMois = (mois) => {
@@ -165,6 +160,7 @@ const enterMois = (mois) => {
     currentPath.value.mois = mois;
     currentView.value = 'dossiers';
     searchQuery.value = '';
+    currentPage.value = 1;
 };
 
 const enterDossier = async (dossier) => {
@@ -173,19 +169,21 @@ const enterDossier = async (dossier) => {
     currentView.value = 'files';
     searchQuery.value = '';
     currentDossierId.value = dossier.id;
+    currentPage.value = 1;
     dossierArchives.value = [];
 
-    await loadDossierArchives(dossier.id);
+    await loadDossierArchives(dossier.id, currentPage.value);
 };
 
-const loadDossierArchives = async (dossierId) => {
+const loadDossierArchives = async (dossierId, page = 1) => {
     isLoadingArchives.value = true;
     try {
         const response = await axios.get(route('dossiers.archives', dossierId), {
             params: {
                 status: statusFilter.value !== 'all' ? statusFilter.value : null,
                 search: searchQuery.value || null,
-                per_page: 20
+                page: page,
+                per_page: perPage.value
             }
         });
         dossierArchives.value = response.data.data || [];
@@ -198,13 +196,21 @@ const loadDossierArchives = async (dossierId) => {
     }
 };
 
+// 🔥 CHANGEMENT DE PAGE
+const changePage = (page) => {
+    if (page < 1 || page > archivesPagination.value?.last_page) return;
+    currentPage.value = page;
+    loadDossierArchives(currentDossierId.value, page);
+};
+
 const goBack = () => {
     const last = history.value.pop();
     if (last) {
         currentView.value = last.view;
         currentPath.value = last.path;
+        currentPage.value = 1;
         if (currentView.value === 'files') {
-            loadDossierArchives(currentPath.value.dossier.id);
+            loadDossierArchives(currentPath.value.dossier.id, currentPage.value);
         }
     }
 };
@@ -215,6 +221,8 @@ const resetToRoot = () => {
     currentView.value = 'root';
     dossierArchives.value = [];
     currentDossierId.value = null;
+    currentPage.value = 1;
+    archivesPagination.value = null;
 };
 
 // GÉNÉRATION DE RÉFÉRENCE
@@ -241,6 +249,50 @@ const getStatusInfo = (file) => {
     return statusMap[file.validation_status] || { label: 'Inconnu', color: 'grey', icon: 'mdi-help-circle' };
 };
 
+// 🔥 VÉRIFICATION DES DOUBLONS
+const checkDuplicatesBeforeSubmit = async () => {
+    if (!multipleMode.value || !form.fichiers || form.fichiers.length === 0) {
+        return true;
+    }
+
+    checkingDuplicate.value = true;
+    duplicateFiles.value = [];
+    duplicateWarning.value = false;
+
+    try {
+        const response = await axios.post(route('archives.check-duplicates'), {
+            dossier_id: form.dossier_id,
+            fichiers: form.fichiers.map(f => f.name)
+        });
+
+        checkingDuplicate.value = false;
+
+        if (response.data.duplicates && response.data.duplicates.length > 0) {
+            duplicateFiles.value = response.data.duplicates;
+            duplicateWarning.value = true;
+
+            const message = duplicateFiles.value.map(d =>
+                `📄 ${d.file} (Réf: ${d.reference}) - ${d.status === 'pending' ? 'En attente' : d.status === 'validated' ? 'Validé' : 'Rejeté'}`
+            ).join('\n');
+
+            showNotify(`${duplicateFiles.value.length} fichier(s) en double détecté(s) !`, 'warning');
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        checkingDuplicate.value = false;
+        console.error('Erreur lors de la vérification des doublons:', error);
+        return true;
+    }
+};
+
+// 🔥 FORCER L'ARCHIVAGE MALGRÉ LES DOUBLONS
+const forceSubmit = () => {
+    duplicateWarning.value = false;
+    submitArchive();
+};
+
 // ACTIONS FICHIERS
 const openUploadDialog = () => {
     if (!currentPath.value.dossier) {
@@ -253,6 +305,8 @@ const openUploadDialog = () => {
     folderMode.value = false;
     folderFiles.value = [];
     folderFilesInfo.value = [];
+    duplicateWarning.value = false;
+    duplicateFiles.value = [];
     form.reset();
     form.clearErrors();
     form.dossier_id = currentPath.value.dossier.id;
@@ -268,6 +322,8 @@ const openEditDialog = (file) => {
     folderMode.value = false;
     folderFiles.value = [];
     folderFilesInfo.value = [];
+    duplicateWarning.value = false;
+    duplicateFiles.value = [];
     form.clearErrors();
     form.titre = file.titre;
     form.reference = file.reference;
@@ -283,6 +339,8 @@ const onMultipleModeChange = (val) => {
         folderMode.value = false;
         folderFiles.value = [];
         folderFilesInfo.value = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
         form.fichier = null;
         form.fichiers = [];
         form.titre = '';
@@ -298,6 +356,8 @@ const onFolderSelect = (event) => {
     if (files.length > 0) {
         folderFiles.value = Array.from(files);
         form.fichiers = folderFiles.value;
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
 
         folderFilesInfo.value = folderFiles.value.map(file => ({
             name: file.name,
@@ -308,7 +368,7 @@ const onFolderSelect = (event) => {
         }));
 
         const totalSize = folderFiles.value.reduce((acc, f) => acc + f.size, 0);
-        showNotify(`📁 ${folderFiles.value.length} fichier(s) selectionne(s) - Taille: ${(totalSize / 1024 / 1024).toFixed(2)} Mo`, 'info');
+        showNotify(`📁 ${folderFiles.value.length} fichier(s) sélectionné(s) - Taille: ${(totalSize / 1024 / 1024).toFixed(2)} Mo`, 'info');
     }
 };
 
@@ -320,6 +380,8 @@ const toggleFolderMode = () => {
         form.fichiers = [];
         folderFiles.value = [];
         folderFilesInfo.value = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
         setTimeout(() => {
             const input = document.getElementById('folderInput');
             if (input) input.click();
@@ -328,6 +390,8 @@ const toggleFolderMode = () => {
         folderFiles.value = [];
         folderFilesInfo.value = [];
         form.fichiers = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
     }
 };
 
@@ -346,7 +410,7 @@ const validateArchive = (file, status) => {
         }, {
             onSuccess: () => {
                 showNotify(`Document ${statusLabel} avec succès`, 'success');
-                loadDossierArchives(currentDossierId.value);
+                loadDossierArchives(currentDossierId.value, currentPage.value);
             },
             onError: () => showNotify('Erreur lors de la validation', 'error')
         });
@@ -354,13 +418,13 @@ const validateArchive = (file, status) => {
 };
 
 // SOUMISSION DU FORMULAIRE
-const submitArchive = () => {
+const submitArchive = async () => {
     if (isEditing.value) {
         form.put(route('archives.update', editingId.value), {
             onSuccess: () => {
                 showNotify('Document mis à jour avec succès');
                 uploadDialog.value = false;
-                loadDossierArchives(currentDossierId.value);
+                loadDossierArchives(currentDossierId.value, currentPage.value);
             },
             onError: () => showNotify('Veuillez corriger les erreurs', 'error')
         });
@@ -369,27 +433,38 @@ const submitArchive = () => {
 
     if (multipleMode.value || folderMode.value) {
         if (!form.fichiers || form.fichiers.length === 0) {
-            showNotify('Veuillez selectionner des fichiers', 'error');
+            showNotify('Veuillez sélectionner des fichiers', 'error');
             return;
         }
 
-        router.post(route('archives.store.multiple'), {
-            dossier_id: form.dossier_id,
-            date_document: form.date_document,
-            description: form.description,
-            mots_cles: form.mots_cles,
-            fichiers: form.fichiers,
-        }, {
+        const canProceed = await checkDuplicatesBeforeSubmit();
+        if (!canProceed) {
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('dossier_id', form.dossier_id);
+        formData.append('date_document', form.date_document);
+        formData.append('description', form.description || '');
+        formData.append('mots_cles', form.mots_cles || '');
+
+        form.fichiers.forEach((file, index) => {
+            formData.append(`fichiers[${index}]`, file);
+        });
+
+        router.post(route('archives.store.multiple'), formData, {
             forceFormData: true,
             onSuccess: () => {
-                showNotify(`${form.fichiers.length} fichier(s) archives avec succes`);
+                showNotify(`${form.fichiers.length} fichier(s) archivés avec succès`);
                 uploadDialog.value = false;
                 form.reset();
                 multipleMode.value = false;
                 folderMode.value = false;
                 folderFiles.value = [];
                 folderFilesInfo.value = [];
-                loadDossierArchives(currentDossierId.value);
+                duplicateWarning.value = false;
+                duplicateFiles.value = [];
+                loadDossierArchives(currentDossierId.value, currentPage.value);
             },
             onError: () => showNotify('Erreur lors de l\'archivage', 'error')
         });
@@ -398,10 +473,10 @@ const submitArchive = () => {
 
     form.post(route('archives.store'), {
         onSuccess: () => {
-            showNotify('Document archive avec succes');
+            showNotify('Document archivé avec succès');
             uploadDialog.value = false;
             form.reset();
-            loadDossierArchives(currentDossierId.value);
+            loadDossierArchives(currentDossierId.value, currentPage.value);
         },
         onError: () => showNotify('Erreur lors de l\'archivage', 'error')
     });
@@ -412,11 +487,11 @@ const deleteArchive = (id) => {
         showNotify('Vous n\'avez pas les droits pour supprimer', 'error');
         return;
     }
-    showConfirm('Supprimer definitivement ce document ?', () => {
+    showConfirm('Supprimer définitivement ce document ?', () => {
         router.delete(route('archives.destroy', id), {
             onSuccess: () => {
-                showNotify('Document supprime avec succes', 'success');
-                loadDossierArchives(currentDossierId.value);
+                showNotify('Document supprimé avec succès', 'success');
+                loadDossierArchives(currentDossierId.value, currentPage.value);
             },
             onError: () => showNotify('Erreur lors de la suppression', 'error')
         });
@@ -436,7 +511,8 @@ const downloadFile = (file) => {
 // WATCH pour recharger les archives quand le filtre change
 watch([searchQuery, statusFilter], () => {
     if (currentView.value === 'files' && currentDossierId.value) {
-        loadDossierArchives(currentDossierId.value);
+        currentPage.value = 1;
+        loadDossierArchives(currentDossierId.value, currentPage.value);
     }
 });
 
@@ -592,7 +668,7 @@ const getFileColor = (ext) => {
                     </v-col>
                 </v-row>
 
-                <!-- Fichiers -->
+                <!-- Fichiers avec PAGINATION -->
                 <div v-else-if="currentView === 'files'">
                     <div class="d-flex justify-space-between align-center mb-4 flex-wrap gap-2">
                         <div>
@@ -697,6 +773,32 @@ const getFileColor = (ext) => {
                             </tbody>
                         </v-table>
                     </v-card>
+
+                    <!-- 🔥 PAGINATION DU DASHBOARD -->
+                    <div v-if="archivesPagination && archivesPagination.last_page > 1"
+                        class="d-flex justify-center align-center mt-4 gap-2">
+                        <v-btn size="small" variant="text" :disabled="currentPage <= 1"
+                            @click="changePage(currentPage - 1)">
+                            <v-icon>mdi-chevron-left</v-icon>
+                        </v-btn>
+
+                        <v-btn v-for="page in archivesPagination.last_page" :key="page" size="small"
+                            :variant="page === currentPage ? 'flat' : 'text'"
+                            :color="page === currentPage ? 'primary' : 'grey-darken-1'" @click="changePage(page)"
+                            class="px-2">
+                            {{ page }}
+                        </v-btn>
+
+                        <v-btn size="small" variant="text" :disabled="currentPage >= archivesPagination.last_page"
+                            @click="changePage(currentPage + 1)">
+                            <v-icon>mdi-chevron-right</v-icon>
+                        </v-btn>
+                    </div>
+
+                    <div v-if="archivesPagination" class="text-caption text-grey text-center mt-2">
+                        Page {{ archivesPagination.current_page }} sur {{ archivesPagination.last_page }}
+                        ({{ archivesPagination.total }} fichiers au total)
+                    </div>
                 </div>
 
                 <div v-if="filteredData.length === 0 && currentView !== 'files'" class="text-center py-16">
@@ -706,7 +808,7 @@ const getFileColor = (ext) => {
             </v-card-text>
         </v-card>
 
-        <!-- DIALOGUE D'ARCHIVAGE -->
+        <!-- DIALOGUE D'ARCHIVAGE AVEC DOUBLONS -->
         <v-dialog v-model="uploadDialog" max-width="750px" persistent scrollable>
             <v-card class="rounded-xl overflow-hidden" style="max-height: 90vh;">
                 <v-toolbar color="primary" flat>
@@ -735,6 +837,32 @@ const getFileColor = (ext) => {
                     <v-progress-linear v-if="form.processing" :model-value="form.progress?.percentage" color="primary"
                         height="4" striped class="mb-4" rounded></v-progress-linear>
 
+                    <!-- 🔥 ALERTE DOUBLONS -->
+                    <v-alert v-if="duplicateWarning && duplicateFiles.length > 0" type="warning" variant="tonal"
+                        class="mb-4" closable @click:close="duplicateWarning = false">
+                        <div class="font-weight-bold mb-2">
+                            ⚠️ {{ duplicateFiles.length }} fichier(s) en double détecté(s)
+                        </div>
+                        <div v-for="dup in duplicateFiles.slice(0, 5)" :key="dup.file" class="text-caption">
+                            • {{ dup.file }}
+                            <span class="text-grey">(Réf: {{ dup.reference }})</span>
+                            <v-chip
+                                :color="dup.status === 'pending' ? 'warning' : dup.status === 'validated' ? 'success' : 'error'"
+                                size="x-small" class="ml-1">
+                                {{ dup.status === 'pending' ? 'En attente' : dup.status === 'validated' ? 'Validé' :
+                                    'Rejeté' }}
+                            </v-chip>
+                        </div>
+                        <div v-if="duplicateFiles.length > 5" class="text-caption text-grey mt-1">
+                            + {{ duplicateFiles.length - 5 }} autres fichiers
+                        </div>
+                        <div class="mt-2">
+                            <v-btn size="small" color="warning" variant="text" @click="forceSubmit">
+                                Ignorer et archiver quand même
+                            </v-btn>
+                        </div>
+                    </v-alert>
+
                     <v-form @submit.prevent="submitArchive">
                         <div v-if="!isEditing" class="mb-4">
                             <div class="text-subtitle-2 font-weight-bold mb-2 text-primary">Mode d'importation</div>
@@ -746,14 +874,14 @@ const getFileColor = (ext) => {
                             <div v-if="multipleMode" class="mt-3">
                                 <v-btn color="info" variant="tonal" @click="toggleFolderMode" block>
                                     <v-icon left>{{ folderMode ? 'mdi-folder-open' : 'mdi-folder' }}</v-icon>
-                                    {{ folderMode ? 'Dossier selectionne' : 'Selectionner un dossier' }}
+                                    {{ folderMode ? 'Dossier sélectionné' : 'Sélectionner un dossier' }}
                                 </v-btn>
                                 <div class="text-caption text-grey mt-1">
                                     <span v-if="folderMode">
-                                        {{ folderFiles.length }} fichier(s) trouve(s) dans le dossier
+                                        {{ folderFiles.length }} fichier(s) trouvé(s) dans le dossier
                                     </span>
                                     <span v-else>
-                                        Selectionnez un dossier pour importer tous les fichiers
+                                        Sélectionnez un dossier pour importer tous les fichiers
                                     </span>
                                 </div>
                             </div>
@@ -766,9 +894,9 @@ const getFileColor = (ext) => {
                         <v-row dense>
                             <template v-if="!multipleMode">
                                 <v-col cols="12" md="6">
-                                    <v-text-field v-model="form.reference" label="Reference (auto-generee)"
+                                    <v-text-field v-model="form.reference" label="Référence (auto-générée)"
                                         variant="outlined" density="comfortable" :error-messages="form.errors.reference"
-                                        readonly disabled hint="La reference est generee automatiquement"
+                                        readonly disabled hint="La référence est générée automatiquement"
                                         persistent-hint>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-tag</v-icon></template>
@@ -797,18 +925,18 @@ const getFileColor = (ext) => {
                                         <strong>{{ folderMode ? 'Mode dossier' : 'Mode multi-fichiers' }}</strong>
                                         <div class="text-caption mt-1">
                                             <span v-if="folderMode">
-                                                Les fichiers du dossier seront importes automatiquement ({{
+                                                Les fichiers du dossier seront importés automatiquement ({{
                                                     folderFiles.length }} fichiers)
                                             </span>
                                             <span v-else>
-                                                Selectionnez plusieurs fichiers à importer
+                                                Sélectionnez plusieurs fichiers à importer
                                             </span>
                                         </div>
                                     </v-alert>
                                 </v-col>
                                 <v-col cols="12">
                                     <v-text-field v-model="form.date_document" type="date"
-                                        label="Date du document (appliquee à tous les fichiers)" variant="outlined"
+                                        label="Date du document (appliquée à tous les fichiers)" variant="outlined"
                                         density="comfortable" :error-messages="form.errors.date_document" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-calendar</v-icon></template>
@@ -842,7 +970,7 @@ const getFileColor = (ext) => {
                                     density="comfortable" rows="2"></v-textarea>
                             </v-col>
                             <v-col cols="12">
-                                <v-text-field v-model="form.mots_cles" label="Mots-cles (separes par des virgules)"
+                                <v-text-field v-model="form.mots_cles" label="Mots-clés (séparés par des virgules)"
                                     variant="outlined" density="comfortable" hint="Ex: contrat, facture, rh"
                                     persistent-hint>
                                     <template v-slot:prepend-inner><v-icon color="primary"
@@ -886,9 +1014,20 @@ const getFileColor = (ext) => {
                             <v-spacer></v-spacer>
                             <v-btn variant="text" @click="uploadDialog = false" :disabled="form.processing"
                                 rounded="lg">Annuler</v-btn>
-                            <v-btn color="primary" type="submit" :loading="form.processing" class="px-6 ml-2"
-                                rounded="lg" :disabled="multipleMode && (!form.fichiers || form.fichiers.length === 0)">
-                                <template v-if="isEditing">Mettre à jour</template>
+                            <v-btn v-if="duplicateWarning && duplicateFiles.length > 0" color="error" variant="tonal"
+                                @click="forceSubmit" class="mr-2" :disabled="form.processing">
+                                <v-icon left>mdi-alert</v-icon>
+                                Ignorer les doublons ({{ duplicateFiles.length }})
+                            </v-btn>
+                            <v-btn color="primary" type="submit" :loading="form.processing || checkingDuplicate"
+                                class="px-6 ml-2" rounded="lg"
+                                :disabled="multipleMode && (!form.fichiers || form.fichiers.length === 0)">
+                                <template v-if="checkingDuplicate">
+                                    <v-progress-circular indeterminate size="20" color="white"
+                                        class="mr-2"></v-progress-circular>
+                                    Vérification...
+                                </template>
+                                <template v-else-if="isEditing">Mettre à jour</template>
                                 <template v-else-if="multipleMode">
                                     Archiver {{ form.fichiers?.length || 0 }} fichier(s)
                                 </template>
@@ -900,7 +1039,7 @@ const getFileColor = (ext) => {
             </v-card>
         </v-dialog>
 
-        <!-- PREVISUALISATION -->
+        <!-- PRÉVISUALISATION -->
         <v-dialog v-model="previewDialog" width="95%" max-width="1600px">
             <v-card rounded="xl">
                 <v-toolbar color="primary" density="comfortable">
@@ -977,7 +1116,19 @@ const getFileColor = (ext) => {
     border-bottom: 1px solid #eee;
 }
 
+.gap-1 {
+    gap: 4px;
+}
+
 .gap-2 {
     gap: 8px;
+}
+
+.gap-3 {
+    gap: 12px;
+}
+
+.h-100 {
+    height: 100%;
 }
 </style>

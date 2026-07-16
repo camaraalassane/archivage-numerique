@@ -4,6 +4,7 @@ import { ref, computed, watch, reactive } from 'vue';
 import { useForm, Head, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import debounce from 'lodash/debounce';
+import axios from 'axios';
 
 const props = defineProps({
     archives: { type: Object, required: true },
@@ -64,14 +65,17 @@ const executeConfirm = () => {
 };
 
 const dialog = ref(false);
-const deleteDialog = ref(false);
-const archiveToDelete = ref(null);
 const isEditing = ref(false);
 const editingId = ref(null);
 
 // Modes
 const multipleMode = ref(false);
 const folderMode = ref(false);
+
+// 🔥 ÉTATS POUR LA DÉTECTION DES DOUBLONS
+const checkingDuplicate = ref(false);
+const duplicateWarning = ref(false);
+const duplicateFiles = ref([]);
 
 // Filtres
 const search = ref(props.filters?.search || '');
@@ -99,7 +103,7 @@ const form = useForm({
     fichiers: [],
 });
 
-// === OPTIMISATION : Générer une base épurée et courte (Maximum 25 caractères) ===
+// Génération de référence
 const generateReference = () => {
     if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) return '';
 
@@ -112,7 +116,6 @@ const generateReference = () => {
     const dossierClean = dossier.nom.toUpperCase().replace(/[^A-Z0-9]/g, '_');
     const rawBase = `${annee.annee}_${String(moisItem.mois).padStart(2, '0')}_${dossierClean}`;
 
-    // On tronque à 25 caractères pour laisser au contrôleur Laravel le soin d'injecter l'unicité
     return rawBase.substr(0, 25);
 };
 
@@ -194,6 +197,50 @@ const exportExcel = () => {
     window.open(route('archives.export') + '?' + params, '_blank');
 };
 
+// 🔥 VÉRIFICATION DES DOUBLONS
+const checkDuplicatesBeforeSubmit = async () => {
+    if (!multipleMode.value || !form.fichiers || form.fichiers.length === 0) {
+        return true;
+    }
+
+    checkingDuplicate.value = true;
+    duplicateFiles.value = [];
+    duplicateWarning.value = false;
+
+    try {
+        const response = await axios.post(route('archives.check-duplicates'), {
+            dossier_id: form.dossier_id,
+            fichiers: form.fichiers.map(f => f.name)
+        });
+
+        checkingDuplicate.value = false;
+
+        if (response.data.duplicates && response.data.duplicates.length > 0) {
+            duplicateFiles.value = response.data.duplicates;
+            duplicateWarning.value = true;
+
+            const message = duplicateFiles.value.map(d =>
+                `📄 ${d.file} (Réf: ${d.reference}) - ${d.status === 'pending' ? 'En attente' : d.status === 'validated' ? 'Validé' : 'Rejeté'}`
+            ).join('\n');
+
+            showNotify(`${duplicateFiles.value.length} fichier(s) en double détecté(s) !`, 'warning');
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        checkingDuplicate.value = false;
+        console.error('Erreur lors de la vérification des doublons:', error);
+        return true;
+    }
+};
+
+// 🔥 FORCER L'ARCHIVAGE MALGRÉ LES DOUBLONS
+const forceSubmit = () => {
+    duplicateWarning.value = false;
+    submit();
+};
+
 const openCreateDialog = () => {
     if (!canCreate.value) {
         showNotify('Vous n\'avez pas les droits pour créer des archives.', 'error');
@@ -205,6 +252,8 @@ const openCreateDialog = () => {
     folderMode.value = false;
     folderFiles.value = [];
     folderFilesInfo.value = [];
+    duplicateWarning.value = false;
+    duplicateFiles.value = [];
     form.reset();
     form.clearErrors();
     selectedAnneeId.value = null;
@@ -230,6 +279,8 @@ const openEditDialog = (archive) => {
     folderMode.value = false;
     folderFiles.value = [];
     folderFilesInfo.value = [];
+    duplicateWarning.value = false;
+    duplicateFiles.value = [];
     form.titre = archive.titre;
     form.reference = archive.reference;
     form.dossier_id = archive.dossier_id;
@@ -256,6 +307,8 @@ const onMultipleModeChange = (val) => {
         folderMode.value = false;
         folderFiles.value = [];
         folderFilesInfo.value = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
         form.fichier = null;
         form.fichiers = [];
         form.titre = '';
@@ -271,6 +324,8 @@ const onFolderSelect = (event) => {
     if (files.length > 0) {
         folderFiles.value = Array.from(files);
         form.fichiers = folderFiles.value;
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
 
         folderFilesInfo.value = folderFiles.value.map(file => ({
             name: file.name,
@@ -293,6 +348,8 @@ const toggleFolderMode = () => {
         form.fichiers = [];
         folderFiles.value = [];
         folderFilesInfo.value = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
         setTimeout(() => {
             const input = document.getElementById('folderInput');
             if (input) input.click();
@@ -301,16 +358,16 @@ const toggleFolderMode = () => {
         folderFiles.value = [];
         folderFilesInfo.value = [];
         form.fichiers = [];
+        duplicateWarning.value = false;
+        duplicateFiles.value = [];
     }
 };
 
-// === LOGIQUE DE SOUMISSION NETTOYÉE ===
-const submit = () => {
-    console.log('🚀 submit appelé', { isEditing: isEditing.value, multipleMode: multipleMode.value });
-
+// === SOUMISSION AVEC VÉRIFICATION DES DOUBLONS ===
+const submit = async () => {
     if (form.processing) return;
 
-    // --- MODE ÉDITION ---
+    // ÉDITION
     if (isEditing.value) {
         form.put(route('archives.update', editingId.value), {
             onSuccess: () => {
@@ -327,7 +384,7 @@ const submit = () => {
         return;
     }
 
-    // --- MODE MULTIPLE / DOSSIER ---
+    // MODE MULTIPLE
     if (multipleMode.value || folderMode.value) {
         if (!form.fichiers || form.fichiers.length === 0) {
             showNotify('Veuillez sélectionner des fichiers', 'error');
@@ -336,6 +393,11 @@ const submit = () => {
 
         if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) {
             showNotify('Veuillez sélectionner une année, un mois et un dossier', 'error');
+            return;
+        }
+
+        const canProceed = await checkDuplicatesBeforeSubmit();
+        if (!canProceed) {
             return;
         }
 
@@ -361,6 +423,8 @@ const submit = () => {
                 folderMode.value = false;
                 folderFiles.value = [];
                 folderFilesInfo.value = [];
+                duplicateWarning.value = false;
+                duplicateFiles.value = [];
                 selectedAnneeId.value = null;
                 selectedMoisId.value = null;
                 showNotify('Fichiers archivés avec succès', 'success');
@@ -372,7 +436,7 @@ const submit = () => {
         return;
     }
 
-    // --- MODE CRÉATION UNIQUE ---
+    // MODE UNIQUE
     if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) {
         showNotify('Veuillez sélectionner une année, un mois et un dossier', 'error');
         return;
@@ -383,7 +447,6 @@ const submit = () => {
         return;
     }
 
-    // On passe simplement la base épurée calculée
     form.reference = generateReference();
 
     form.post(route('archives.store'), {
@@ -392,11 +455,17 @@ const submit = () => {
             form.reset();
             selectedAnneeId.value = null;
             selectedMoisId.value = null;
+            duplicateWarning.value = false;
+            duplicateFiles.value = [];
             showNotify('Document archivé avec succès', 'success');
         },
         onError: (errors) => {
             console.error(errors);
-            showNotify('Erreur lors de l\'archivage', 'error');
+            if (errors.doublon) {
+                showNotify(errors.doublon, 'error');
+            } else {
+                showNotify('Erreur lors de l\'archivage', 'error');
+            }
         },
         preserveScroll: true
     });
@@ -409,6 +478,8 @@ const resetForm = () => {
     folderMode.value = false;
     isEditing.value = false;
     editingId.value = null;
+    duplicateWarning.value = false;
+    duplicateFiles.value = [];
     selectedAnneeId.value = null;
     selectedMoisId.value = null;
 };
@@ -506,7 +577,7 @@ const formatSize = (bytes) => {
                 <div>
                     <div class="text-h6 font-weight-bold">Archives</div>
                     <div class="text-caption text-grey">
-                        {{ isArchiviste ? 'Mes documents archives' : 'Gestion du fonds documentaire' }}
+                        {{ isArchiviste ? 'Mes documents archivés' : 'Gestion du fonds documentaire' }}
                     </div>
                 </div>
                 <v-spacer></v-spacer>
@@ -530,15 +601,15 @@ const formatSize = (bytes) => {
                 <v-select v-model="filterType" :items="type_documents" label="Format" variant="solo" density="compact"
                     hide-details flat clearable style="max-width: 120px;"></v-select>
                 <v-btn v-if="filterDossier || search || filterDateDebut || filterType" variant="text" color="error"
-                    size="small" @click="resetFilters" prepend-icon="mdi-filter-off">Reinitialiser</v-btn>
+                    size="small" @click="resetFilters" prepend-icon="mdi-filter-off">Réinitialiser</v-btn>
             </div>
 
-            <!-- TABLEAU -->
+            <!-- TABLEAU AVEC PAGINATION -->
             <div class="flex-grow-1 overflow-hidden bg-white">
                 <v-table fixed-header class="h-100">
                     <thead>
                         <tr>
-                            <th class="bg-grey-lighten-5">Reference</th>
+                            <th class="bg-grey-lighten-5">Référence</th>
                             <th class="bg-grey-lighten-5">Titre</th>
                             <th class="bg-grey-lighten-5">Emplacement</th>
                             <th class="bg-grey-lighten-5">Date Doc.</th>
@@ -576,26 +647,28 @@ const formatSize = (bytes) => {
 
             <!-- PAGINATION -->
             <v-divider></v-divider>
-            <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between">
-                <div class="text-caption text-grey-darken-1">Affichage de {{ archives.from || 0 }} à {{ archives.to || 0
-                    }} sur {{ archives.total }} documents</div>
+            <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between flex-wrap gap-2">
+                <div class="text-caption text-grey-darken-1">
+                    Affichage de {{ archives.from || 0 }} à {{ archives.to || 0 }} sur {{ archives.total }} documents
+                </div>
                 <div class="d-flex gap-1">
                     <v-btn v-for="(link, k) in archives.links" :key="k" :disabled="link.url === null"
                         :variant="link.active ? 'flat' : 'text'" :color="link.active ? 'primary' : 'grey-darken-1'"
                         size="small" class="px-2"
                         @click="link.url ? router.get(link.url, {}, { preserveState: true, preserveScroll: true }) : null"
-                        v-html="link.label"></v-btn>
+                        v-html="link.label">
+                    </v-btn>
                 </div>
             </div>
         </v-card>
 
-        <!-- Dialog Creation/Modification -->
+        <!-- Dialog Création/Modification -->
         <v-dialog v-model="dialog" max-width="800px" persistent scrollable>
             <v-card class="rounded-xl" style="max-height: 90vh; display: flex; flex-direction: column;">
                 <v-toolbar :color="isEditing ? 'primary' : 'primary'" class="rounded-t-xl">
                     <v-icon start class="ml-4">{{ isEditing ? 'mdi-pencil' : 'mdi-plus' }}</v-icon>
                     <v-toolbar-title class="font-weight-bold">
-                        <span v-if="isEditing">Modifier l archive</span>
+                        <span v-if="isEditing">Modifier l'archive</span>
                         <span v-else>Nouvelle Archive</span>
                     </v-toolbar-title>
                     <v-spacer></v-spacer>
@@ -608,6 +681,32 @@ const formatSize = (bytes) => {
                     <v-progress-linear v-if="form.processing" :model-value="form.progress?.percentage" color="primary"
                         height="4" striped class="mb-4" rounded></v-progress-linear>
 
+                    <!-- 🔥 ALERTE DOUBLONS -->
+                    <v-alert v-if="duplicateWarning && duplicateFiles.length > 0" type="warning" variant="tonal"
+                        class="mb-4" closable @click:close="duplicateWarning = false">
+                        <div class="font-weight-bold mb-2">
+                            ⚠️ {{ duplicateFiles.length }} fichier(s) en double détecté(s)
+                        </div>
+                        <div v-for="dup in duplicateFiles.slice(0, 5)" :key="dup.file" class="text-caption">
+                            • {{ dup.file }}
+                            <span class="text-grey">(Réf: {{ dup.reference }})</span>
+                            <v-chip
+                                :color="dup.status === 'pending' ? 'warning' : dup.status === 'validated' ? 'success' : 'error'"
+                                size="x-small" class="ml-1">
+                                {{ dup.status === 'pending' ? 'En attente' : dup.status === 'validated' ? 'Validé' :
+                                    'Rejeté' }}
+                            </v-chip>
+                        </div>
+                        <div v-if="duplicateFiles.length > 5" class="text-caption text-grey mt-1">
+                            + {{ duplicateFiles.length - 5 }} autres fichiers
+                        </div>
+                        <div class="mt-2">
+                            <v-btn size="small" color="warning" variant="text" @click="forceSubmit">
+                                Ignorer et archiver quand même
+                            </v-btn>
+                        </div>
+                    </v-alert>
+
                     <v-form @submit.prevent="submit">
                         <!-- Emplacement -->
                         <div class="mb-4">
@@ -616,7 +715,7 @@ const formatSize = (bytes) => {
                             <v-row dense>
                                 <v-col cols="12" md="4">
                                     <v-select v-model="selectedAnneeId" :items="annees" item-title="annee"
-                                        item-value="id" label="1. Choisir l annee" variant="outlined"
+                                        item-value="id" label="1. Choisir l'année" variant="outlined"
                                         density="comfortable" :disabled="isEditing" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-calendar</v-icon></template>
@@ -664,14 +763,14 @@ const formatSize = (bytes) => {
                             <div v-if="multipleMode" class="mt-3">
                                 <v-btn color="info" variant="tonal" @click="toggleFolderMode" block>
                                     <v-icon left>{{ folderMode ? 'mdi-folder-open' : 'mdi-folder' }}</v-icon>
-                                    {{ folderMode ? 'Dossier selectionne' : 'Selectionner un dossier' }}
+                                    {{ folderMode ? 'Dossier sélectionné' : 'Sélectionner un dossier' }}
                                 </v-btn>
                                 <div class="text-caption text-grey mt-1">
                                     <span v-if="folderMode">
-                                        {{ folderFiles.length }} fichier(s) trouve(s) dans le dossier
+                                        {{ folderFiles.length }} fichier(s) trouvé(s) dans le dossier
                                     </span>
                                     <span v-else>
-                                        Selectionnez un dossier pour importer tous les fichiers
+                                        Sélectionnez un dossier pour importer tous les fichiers
                                     </span>
                                 </div>
                             </div>
@@ -685,10 +784,10 @@ const formatSize = (bytes) => {
                         <v-row dense>
                             <template v-if="!multipleMode">
                                 <v-col cols="12" md="6">
-                                    <v-text-field v-model="form.reference"
-                                        label="Reference (auto-generee avec timestamp)" variant="outlined"
-                                        density="comfortable" :error-messages="form.errors.reference" readonly disabled
-                                        hint="La reference est generee automatiquement avec un timestamp pour garantir l'unicite"
+                                    <v-text-field v-model="form.reference" label="Référence (auto-générée)"
+                                        variant="outlined" density="comfortable" :error-messages="form.errors.reference"
+                                        readonly disabled
+                                        hint="La référence est générée automatiquement pour garantir l'unicité"
                                         persistent-hint>
                                         <template v-slot:prepend-inner>
                                             <v-icon color="primary" size="small">mdi-tag</v-icon>
@@ -718,18 +817,18 @@ const formatSize = (bytes) => {
                                         <strong>{{ folderMode ? 'Mode dossier' : 'Mode multi-fichiers' }}</strong>
                                         <div class="text-caption mt-1">
                                             <span v-if="folderMode">
-                                                Les fichiers du dossier seront importes automatiquement ({{
+                                                Les fichiers du dossier seront importés automatiquement ({{
                                                     folderFiles.length }} fichiers)
                                             </span>
                                             <span v-else>
-                                                Selectionnez plusieurs fichiers à importer
+                                                Sélectionnez plusieurs fichiers à importer
                                             </span>
                                         </div>
                                     </v-alert>
                                 </v-col>
                                 <v-col cols="12">
                                     <v-text-field v-model="form.date_document" type="date"
-                                        label="Date du document (appliquee à tous les fichiers)" variant="outlined"
+                                        label="Date du document (appliquée à tous les fichiers)" variant="outlined"
                                         density="comfortable" :error-messages="form.errors.date_document" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-calendar</v-icon></template>
@@ -763,7 +862,7 @@ const formatSize = (bytes) => {
                                     density="comfortable" rows="2"></v-textarea>
                             </v-col>
                             <v-col cols="12">
-                                <v-text-field v-model="form.mots_cles" label="Mots-cles (separes par des virgules)"
+                                <v-text-field v-model="form.mots_cles" label="Mots-clés (séparés par des virgules)"
                                     variant="outlined" density="comfortable" hint="Ex: contrat, facture, rh"
                                     persistent-hint>
                                     <template v-slot:prepend-inner><v-icon color="primary"
@@ -808,9 +907,20 @@ const formatSize = (bytes) => {
                             <v-btn variant="text" @click="dialog = false" :disabled="form.processing" rounded="lg">
                                 Annuler
                             </v-btn>
-                            <v-btn color="primary" type="submit" :loading="form.processing" class="px-6 ml-2"
-                                rounded="lg" :disabled="multipleMode && (!form.fichiers || form.fichiers.length === 0)">
-                                <template v-if="isEditing">Mettre à jour</template>
+                            <v-btn v-if="duplicateWarning && duplicateFiles.length > 0" color="error" variant="tonal"
+                                @click="forceSubmit" class="mr-2" :disabled="form.processing">
+                                <v-icon left>mdi-alert</v-icon>
+                                Ignorer les doublons ({{ duplicateFiles.length }})
+                            </v-btn>
+                            <v-btn color="primary" type="submit" :loading="form.processing || checkingDuplicate"
+                                class="px-6 ml-2" rounded="lg"
+                                :disabled="multipleMode && (!form.fichiers || form.fichiers.length === 0)">
+                                <template v-if="checkingDuplicate">
+                                    <v-progress-circular indeterminate size="20" color="white"
+                                        class="mr-2"></v-progress-circular>
+                                    Vérification...
+                                </template>
+                                <template v-else-if="isEditing">Mettre à jour</template>
                                 <template v-else-if="multipleMode">
                                     Archiver {{ form.fichiers?.length || 0 }} fichier(s)
                                 </template>
@@ -827,6 +937,10 @@ const formatSize = (bytes) => {
 <style scoped>
 .gap-1 {
     gap: 4px;
+}
+
+.gap-2 {
+    gap: 8px;
 }
 
 .gap-3 {

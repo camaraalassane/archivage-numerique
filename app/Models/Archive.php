@@ -135,6 +135,42 @@ class Archive extends Model
         return false;
     }
 
+    /**
+     * Vérifier l'existence d'un doublon
+     */
+    public static function isDuplicate($reference, $dossierId, $fileName = null)
+    {
+        $query = self::where('reference', $reference)
+            ->where('dossier_id', $dossierId);
+
+        if ($fileName) {
+            $query->orWhere(function($q) use ($fileName, $dossierId) {
+                $q->where('fichier_nom_original', $fileName)
+                  ->where('dossier_id', $dossierId);
+            });
+        }
+
+        return $query->exists();
+    }
+
+    /**
+     * Obtenir les doublons potentiels
+     */
+    public static function getPotentialDuplicates($searchTerm, $dossierId = null)
+    {
+        $query = self::where(function($q) use ($searchTerm) {
+            $q->where('reference', 'LIKE', '%' . $searchTerm . '%')
+              ->orWhere('titre', 'LIKE', '%' . $searchTerm . '%')
+              ->orWhere('fichier_nom_original', 'LIKE', '%' . $searchTerm . '%');
+        });
+
+        if ($dossierId) {
+            $query->where('dossier_id', $dossierId);
+        }
+
+        return $query->with(['dossier.mois.annee', 'createur'])->get();
+    }
+
     // === ACCESSEURS ===
     public function getStatusLabelAttribute(): string
     {
@@ -217,5 +253,18 @@ class Archive extends Model
     public function getCheminCompletAttribute(): string
     {
         return "{$this->annee} / {$this->nom_mois} / {$this->dossier_nom}";
+    }
+
+    public function getFormattedSizeAttribute(): string
+    {
+        $bytes = $this->fichier_taille;
+        if (!$bytes) return '0 B';
+        $units = ['B', 'KB', 'MB', 'GB'];
+        $i = 0;
+        while ($bytes >= 1024 && $i < count($units) - 1) {
+            $bytes /= 1024;
+            $i++;
+        }
+        return round($bytes, 2) . ' ' . $units[$i];
     }
 }

@@ -56,6 +56,9 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . U
         Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
         Route::post('/archives/bulk', [ArchiveController::class, 'storeMultiple'])->name('archives.store.multiple');
 
+        // 🔥 ROUTE POUR LA VÉRIFICATION DES DOUBLONS
+        Route::post('/archives/check-duplicates', [ArchiveController::class, 'checkDuplicates'])->name('archives.check-duplicates');
+
         // Routes CRUD pour les archives
         Route::get('/archives', [ArchiveController::class, 'index'])->name('archives.index');
         Route::post('/archives', [ArchiveController::class, 'store'])->name('archives.store');
@@ -144,7 +147,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
         Route::delete('/gestionnaire/{archive}', [GestionnaireController::class, 'destroy'])
             ->name('gestionnaire.destroy');
 
-        // 🔥🔥 ACTIONS EN MASSE (NOUVEAU !) 🔥🔥
+        // 🔥🔥 ACTIONS EN MASSE 🔥🔥
         Route::post('/gestionnaire/validate-all', [GestionnaireController::class, 'validateAll'])
             ->name('gestionnaire.validate-all');
         Route::post('/gestionnaire/reject-all', [GestionnaireController::class, 'rejectAll'])
@@ -158,7 +161,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
         Route::get('/gestionnaire/{archive}/download', [GestionnaireController::class, 'download'])
             ->name('gestionnaire.download');
 
-        // Statistiques (optionnel)
+        // Statistiques
         Route::get('/gestionnaire/stats', [GestionnaireController::class, 'stats'])
             ->name('gestionnaire.stats');
     });
