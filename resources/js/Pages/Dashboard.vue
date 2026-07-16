@@ -196,11 +196,14 @@ const loadDossierArchives = async (dossierId, page = 1) => {
     }
 };
 
-// 🔥 CHANGEMENT DE PAGE
-const changePage = (page) => {
-    if (page < 1 || page > archivesPagination.value?.last_page) return;
-    currentPage.value = page;
-    loadDossierArchives(currentDossierId.value, page);
+// 🔥 CHANGEMENT DE PAGE - Version compatible avec les liens Laravel
+const goToPage = (url) => {
+    if (!url) return;
+    // Extraire le paramètre page de l'URL
+    const urlObj = new URL(url, window.location.origin);
+    const page = urlObj.searchParams.get('page') || 1;
+    currentPage.value = parseInt(page);
+    loadDossierArchives(currentDossierId.value, currentPage.value);
 };
 
 const goBack = () => {
@@ -774,30 +777,20 @@ const getFileColor = (ext) => {
                         </v-table>
                     </v-card>
 
-                    <!-- 🔥 PAGINATION DU DASHBOARD -->
-                    <div v-if="archivesPagination && archivesPagination.last_page > 1"
-                        class="d-flex justify-center align-center mt-4 gap-2">
-                        <v-btn size="small" variant="text" :disabled="currentPage <= 1"
-                            @click="changePage(currentPage - 1)">
-                            <v-icon>mdi-chevron-left</v-icon>
-                        </v-btn>
-
-                        <v-btn v-for="page in archivesPagination.last_page" :key="page" size="small"
-                            :variant="page === currentPage ? 'flat' : 'text'"
-                            :color="page === currentPage ? 'primary' : 'grey-darken-1'" @click="changePage(page)"
-                            class="px-2">
-                            {{ page }}
-                        </v-btn>
-
-                        <v-btn size="small" variant="text" :disabled="currentPage >= archivesPagination.last_page"
-                            @click="changePage(currentPage + 1)">
-                            <v-icon>mdi-chevron-right</v-icon>
-                        </v-btn>
-                    </div>
-
-                    <div v-if="archivesPagination" class="text-caption text-grey text-center mt-2">
-                        Page {{ archivesPagination.current_page }} sur {{ archivesPagination.last_page }}
-                        ({{ archivesPagination.total }} fichiers au total)
+                    <!-- 🔥 PAGINATION DU DASHBOARD - Version comme PendingArchives -->
+                    <v-divider class="mt-4"></v-divider>
+                    <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between flex-wrap gap-2">
+                        <div class="text-caption text-grey-darken-1">
+                            Affichage de {{ archivesPagination?.from || 0 }} à {{ archivesPagination?.to || 0 }} sur {{
+                                archivesPagination?.total || 0 }} fichiers
+                        </div>
+                        <div class="d-flex gap-1">
+                            <v-btn v-for="(link, k) in archivesPagination?.links || []" :key="k"
+                                :disabled="link.url === null" :variant="link.active ? 'flat' : 'text'"
+                                :color="link.active ? 'primary' : 'grey-darken-1'" size="small" class="px-2"
+                                @click="link.url ? goToPage(link.url) : null" v-html="link.label">
+                            </v-btn>
+                        </div>
                     </div>
                 </div>
 

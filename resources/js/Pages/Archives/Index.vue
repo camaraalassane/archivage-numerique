@@ -892,7 +892,7 @@ const formatSize = (bytes) => {
                                     <template v-slot:selection="{ fileNames }">
                                         <template v-for="fileName in fileNames" :key="fileName">
                                             <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
-                                                }}</v-chip>
+                                            }}</v-chip>
                                         </template>
                                     </template>
                                 </v-file-input>
