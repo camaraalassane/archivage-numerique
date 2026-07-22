@@ -4,9 +4,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\Archive;
-use App\Models\Dossier;
-use App\Models\DossierAnnee;
-use App\Models\DossierMois;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -16,9 +13,6 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class GestionnaireController extends Controller
 {
-    /**
-     * Affiche toutes les archives en attente (tous les utilisateurs)
-     */
     public function pendingArchives(Request $request)
     {
         $user = Auth::user();
@@ -43,19 +37,17 @@ class GestionnaireController extends Controller
         ->when($request->date_debut, fn($q, $dd) => $q->whereDate('date_document', '>=', $dd))
         ->when($request->date_fin, fn($q, $df) => $q->whereDate('date_document', '<=', $df));
 
+        $pendingArchives = $query->latest()->get();
+        $archivistes = User::whereIn('id', $pendingArchives->pluck('created_by')->unique())->get(['id', 'name']);
+
         return Inertia::render('Gestionnaire/PendingArchives', [
+            'pendingArchives' => $pendingArchives,
+            'archivistes' => $archivistes,
             'filters' => $request->all(['search', 'dossier_id', 'type', 'created_by', 'date_debut', 'date_fin']),
-            'archives' => $query->latest()->paginate(15)->withQueryString(),
-            'dossiers' => Dossier::with(['mois.annee'])->orderBy('nom')->get(['id', 'nom', 'mois_id', 'couleur']),
-            'type_documents' => Archive::select('type_document')->distinct()->pluck('type_document'),
-            'users' => User::all(['id', 'name', 'email']),
             'user' => $user,
         ]);
     }
 
-    /**
-     * Valider une archive
-     */
     public function validate(Request $request, Archive $archive)
     {
         $user = Auth::user();
@@ -78,9 +70,6 @@ class GestionnaireController extends Controller
         return redirect()->back()->with('success', 'Archive validée avec succès.');
     }
 
-    /**
-     * Rejeter une archive
-     */
     public function reject(Request $request, Archive $archive)
     {
         $user = Auth::user();
@@ -103,9 +92,6 @@ class GestionnaireController extends Controller
         return redirect()->back()->with('success', 'Archive rejetée avec succès.');
     }
 
-    /**
-     * 🔥 VALIDER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
-     */
     public function validateAll(Request $request)
     {
         $user = Auth::user();
@@ -115,40 +101,22 @@ class GestionnaireController extends Controller
         }
 
         $request->validate([
-            'archiviste_id' => 'nullable|integer|exists:users,id',
-            'ids' => 'nullable|array',
+            'ids' => 'required|array',
             'ids.*' => 'integer|exists:archives,id',
         ]);
 
-        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
-
-        if ($request->filled('ids') && count($request->ids) > 0) {
-            $query->whereIn('id', $request->ids);
-        } elseif ($request->filled('archiviste_id')) {
-            $query->where('created_by', $request->archiviste_id);
-        } else {
-            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
-        }
-
-        $count = $query->count();
-
-        if ($count === 0) {
-            return redirect()->back()->with('error', 'Aucune archive en attente à valider.');
-        }
-
-        $query->update([
-            'validation_status' => Archive::STATUS_VALIDATED,
-            'validated_by' => $user->id,
-            'validated_at' => now(),
-            'validation_comment' => 'Validé en masse par le gestionnaire',
-        ]);
+        $count = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING)
+            ->update([
+                'validation_status' => Archive::STATUS_VALIDATED,
+                'validated_by' => $user->id,
+                'validated_at' => now(),
+                'validation_comment' => 'Validé en masse par le gestionnaire',
+            ]);
 
         return redirect()->back()->with('success', "{$count} archive(s) validée(s) avec succès.");
     }
 
-    /**
-     * 🔥 REJETER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
-     */
     public function rejectAll(Request $request)
     {
         $user = Auth::user();
@@ -158,41 +126,23 @@ class GestionnaireController extends Controller
         }
 
         $request->validate([
-            'archiviste_id' => 'nullable|integer|exists:users,id',
-            'ids' => 'nullable|array',
+            'ids' => 'required|array',
             'ids.*' => 'integer|exists:archives,id',
             'comment' => 'nullable|string|max:500',
         ]);
 
-        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
-
-        if ($request->filled('ids') && count($request->ids) > 0) {
-            $query->whereIn('id', $request->ids);
-        } elseif ($request->filled('archiviste_id')) {
-            $query->where('created_by', $request->archiviste_id);
-        } else {
-            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
-        }
-
-        $count = $query->count();
-
-        if ($count === 0) {
-            return redirect()->back()->with('error', 'Aucune archive en attente à rejeter.');
-        }
-
-        $query->update([
-            'validation_status' => Archive::STATUS_REJECTED,
-            'validated_by' => $user->id,
-            'validated_at' => now(),
-            'validation_comment' => $request->comment ?? 'Rejeté en masse par le gestionnaire',
-        ]);
+        $count = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING)
+            ->update([
+                'validation_status' => Archive::STATUS_REJECTED,
+                'validated_by' => $user->id,
+                'validated_at' => now(),
+                'validation_comment' => $request->comment ?? 'Rejeté en masse par le gestionnaire',
+            ]);
 
         return redirect()->back()->with('success', "{$count} archive(s) rejetée(s).");
     }
 
-    /**
-     * 🔥 SUPPRIMER TOUTES LES ARCHIVES D'UN ARCHIVISTE OU UNE SÉLECTION
-     */
     public function destroyAll(Request $request)
     {
         $user = Auth::user();
@@ -202,41 +152,43 @@ class GestionnaireController extends Controller
         }
 
         $request->validate([
-            'archiviste_id' => 'nullable|integer|exists:users,id',
-            'ids' => 'nullable|array',
+            'ids' => 'required|array',
             'ids.*' => 'integer|exists:archives,id',
         ]);
 
-        $query = Archive::where('validation_status', Archive::STATUS_PENDING);
+        $archives = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING)
+            ->get();
 
-        if ($request->filled('ids') && count($request->ids) > 0) {
-            $query->whereIn('id', $request->ids);
-        } elseif ($request->filled('archiviste_id')) {
-            $query->where('created_by', $request->archiviste_id);
-        } else {
-            return redirect()->back()->with('error', 'Aucune archive sélectionnée.');
-        }
-
-        $archives = $query->get();
-        $count = $archives->count();
-
-        if ($count === 0) {
-            return redirect()->back()->with('error', 'Aucune archive en attente à supprimer.');
-        }
-
+        $count = 0;
         foreach ($archives as $archive) {
-            if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
-                Storage::disk('public')->delete($archive->fichier_path);
+            if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
+                Storage::disk('archives')->delete($archive->fichier_path);
             }
             $archive->delete();
+            $count++;
         }
 
         return redirect()->back()->with('success', "{$count} archive(s) supprimée(s) avec succès.");
     }
 
-    /**
-     * Visualiser une archive
-     */
+    public function destroy(Archive $archive)
+    {
+        $user = Auth::user();
+
+        if (!$user->isGestionnaire()) {
+            abort(403, 'Vous n\'avez pas les droits pour supprimer cette archive.');
+        }
+
+        if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
+            Storage::disk('archives')->delete($archive->fichier_path);
+        }
+
+        $archive->delete();
+
+        return redirect()->back()->with('success', 'Archive supprimée avec succès.');
+    }
+
     public function viewFile(Archive $archive)
     {
         $user = Auth::user();
@@ -245,16 +197,13 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour visualiser ce document.');
         }
 
-        if (!Storage::disk('public')->exists($archive->fichier_path)) {
+        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
             abort(404);
         }
 
-        return response()->file(storage_path('app/public/' . $archive->fichier_path));
+        return response()->file(Storage::disk('archives')->path($archive->fichier_path));
     }
 
-    /**
-     * Télécharger une archive
-     */
     public function download(Archive $archive): StreamedResponse
     {
         $user = Auth::user();
@@ -263,13 +212,34 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour télécharger ce document.');
         }
 
-        if (!Storage::disk('public')->exists($archive->fichier_path)) {
+        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
             abort(404, 'Le fichier physique est introuvable.');
         }
 
-        return Storage::disk('public')->download(
+        return Storage::disk('archives')->download(
             $archive->fichier_path,
             $archive->fichier_nom_original
         );
+    }
+
+    public function stats(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!$user->isGestionnaire()) {
+            abort(403, 'Vous n\'avez pas les droits pour accéder aux statistiques.');
+        }
+
+        $stats = [
+            'total_pending' => Archive::where('validation_status', Archive::STATUS_PENDING)->count(),
+            'total_validated' => Archive::where('validation_status', Archive::STATUS_VALIDATED)->count(),
+            'total_rejected' => Archive::where('validation_status', Archive::STATUS_REJECTED)->count(),
+            'total_archives' => Archive::count(),
+        ];
+
+        return Inertia::render('Gestionnaire/Stats', [
+            'stats' => $stats,
+            'user' => $user,
+        ]);
     }
 }

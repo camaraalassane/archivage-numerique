@@ -299,10 +299,10 @@ class ImportController extends Controller
             $fileName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file['name']);
             $fullStoragePath = $storagePath . '/' . $fileName;
 
-            Storage::disk('public')->makeDirectory($storagePath);
+            Storage::disk('archives')->makeDirectory($storagePath);
             $content = file_get_contents($fullPath);
             if ($content === false) throw new \Exception('Impossible de lire le fichier');
-            Storage::disk('public')->put($fullStoragePath, $content);
+            Storage::disk('archives')->put($fullStoragePath, $content);
 
             $reference = $this->generateUniqueReference($file['name']);
 

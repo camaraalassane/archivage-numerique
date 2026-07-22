@@ -56,7 +56,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . U
         Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
         Route::post('/archives/bulk', [ArchiveController::class, 'storeMultiple'])->name('archives.store.multiple');
 
-        // 🔥 ROUTE POUR LA VÉRIFICATION DES DOUBLONS
+        // ROUTE POUR LA VÉRIFICATION DES DOUBLONS
         Route::post('/archives/check-duplicates', [ArchiveController::class, 'checkDuplicates'])->name('archives.check-duplicates');
 
         // Routes CRUD pour les archives
@@ -92,9 +92,6 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ADMIN])
     ->group(function () {
         // --- GESTION DES UTILISATEURS ---
         Route::resource('users', UserController::class)->except(['show', 'create', 'store']);
-        Route::get('/users', [UserController::class, 'index'])->name('users.index');
-        Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
-        Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
 
         // --- GESTION DES ANNÉES ---
         Route::resource('annees', DossierAnneeController::class)->except(['show']);
@@ -139,7 +136,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
         Route::get('/gestionnaire/pending-archives', [GestionnaireController::class, 'pendingArchives'])
             ->name('gestionnaire.pending-archives');
 
-        // 🔥 ACTIONS INDIVIDUELLES
+        // ACTIONS INDIVIDUELLES
         Route::post('/gestionnaire/{archive}/validate', [GestionnaireController::class, 'validate'])
             ->name('gestionnaire.validate');
         Route::post('/gestionnaire/{archive}/reject', [GestionnaireController::class, 'reject'])
@@ -147,7 +144,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE])
         Route::delete('/gestionnaire/{archive}', [GestionnaireController::class, 'destroy'])
             ->name('gestionnaire.destroy');
 
-        // 🔥🔥 ACTIONS EN MASSE 🔥🔥
+        // ACTIONS EN MASSE
         Route::post('/gestionnaire/validate-all', [GestionnaireController::class, 'validateAll'])
             ->name('gestionnaire.validate-all');
         Route::post('/gestionnaire/reject-all', [GestionnaireController::class, 'rejectAll'])

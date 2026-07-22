@@ -1,72 +1,40 @@
-<!-- resources/js/Pages/Gestionnaire/PendingArchives.vue -->
 <script setup>
 import { ref, computed } from 'vue';
-import { Head, useForm, router } from '@inertiajs/vue3';
+import { Head, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import debounce from 'lodash/debounce';
 
 const props = defineProps({
-    archives: { type: Object, required: true },
-    dossiers: { type: Array, default: () => [] },
-    type_documents: { type: Array, default: () => [] },
-    users: { type: Array, default: () => [] },
-    filters: { type: Object, default: () => ({}) },
-    user: { type: Object, required: true }
+    pendingArchives: { type: Array, default: () => [] },
+    archivistes: { type: Array, default: () => [] },
 });
 
-// 🔥 SELECTION EN MASSE
+// États
 const selectedIds = ref([]);
-const selectAll = ref(false);
-
-// SNACKBAR
-const snackbar = ref({
-    show: false,
-    text: '',
-    color: 'success'
-});
-
-const showNotify = (text, color = 'success') => {
-    snackbar.value = { show: true, text, color };
-    setTimeout(() => {
-        snackbar.value.show = false;
-    }, 4000);
-};
-
-// 🔥 GESTION DE LA SELECTION
-const toggleSelectAll = () => {
-    if (selectAll.value) {
-        selectedIds.value = props.archives.data.map(a => a.id);
-    } else {
-        selectedIds.value = [];
-    }
-};
-
-const toggleSelect = (id) => {
-    const index = selectedIds.value.indexOf(id);
-    if (index > -1) {
-        selectedIds.value.splice(index, 1);
-    } else {
-        selectedIds.value.push(id);
-    }
-    selectAll.value = selectedIds.value.length === props.archives.data.length;
-};
-
-const selectedCount = computed(() => selectedIds.value.length);
-
-// Filtres
-const search = ref(props.filters?.search || '');
-const filterDossier = ref(props.filters?.dossier_id || null);
-const filterType = ref(props.filters?.type || null);
-const filterUser = ref(props.filters?.created_by || null);
-const filterDateDebut = ref(props.filters?.date_debut || null);
-const filterDateFin = ref(props.filters?.date_fin || null);
-
-// Dialogue de confirmation
+const rejectDialog = ref(false);
+const rejectAllDialog = ref(false);
 const confirmDialog = ref(false);
+const previewDialog = ref(false);
+const currentArchive = ref(null);
+const rejectReason = ref('');
+const rejectAllReason = ref('');
+const searchQuery = ref('');
+const expandedArchiviste = ref(null);
+const currentFileUrl = ref('');
+const currentFileTitle = ref('');
 const confirmAction = ref(null);
 const confirmMessage = ref('');
 const confirmTitle = ref('Confirmation');
 
+// Snackbar
+const snackbar = ref({ show: false, text: '', color: 'success' });
+const showNotification = (text, color = 'success') => {
+    snackbar.value = { show: true, text, color };
+    setTimeout(() => {
+        snackbar.value.show = false;
+    }, 3000);
+};
+
+// Dialogue de confirmation personnalisé
 const showConfirm = (message, action, title = 'Confirmation') => {
     confirmMessage.value = message;
     confirmAction.value = action;
@@ -81,158 +49,174 @@ const executeConfirm = () => {
     confirmDialog.value = false;
 };
 
-// Dialogue de rejet
-const rejectDialog = ref(false);
-const rejectArchive = ref(null);
-const rejectForm = useForm({
-    comment: '',
+// Groupement par archiviste
+const archivesByArchiviste = computed(() => {
+    const groups = {};
+    props.pendingArchives.forEach(archive => {
+        const key = archive.created_by || 0;
+        const name = archive.createur?.name || 'Archiviste ' + key;
+        if (!groups[key]) {
+            groups[key] = { id: key, name, archives: [] };
+        }
+        groups[key].archives.push(archive);
+    });
+    return Object.values(groups).sort((a, b) => b.archives.length - a.archives.length);
 });
 
-const openRejectDialog = (archive) => {
-    rejectArchive.value = archive;
-    rejectForm.comment = '';
-    rejectForm.clearErrors();
-    rejectDialog.value = true;
-};
-
-const confirmReject = () => {
-    rejectForm.post(route('gestionnaire.reject', rejectArchive.value.id), {
-        onSuccess: () => {
-            rejectDialog.value = false;
-            rejectArchive.value = null;
-            rejectForm.reset();
-            showNotify('Archive rejetée avec succès', 'success');
-            router.reload({ only: ['archives'] });
-        },
-        onError: () => {
-            showNotify('Erreur lors du rejet', 'error');
-        }
-    });
-};
-
-// 🔥 ACTIONS EN MASSE
-const validateAll = () => {
-    if (selectedIds.value.length === 0) {
-        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
-        return;
+// Sélection
+const toggleSelect = (id) => {
+    const index = selectedIds.value.indexOf(id);
+    if (index > -1) {
+        selectedIds.value.splice(index, 1);
+    } else {
+        selectedIds.value.push(id);
     }
-    showConfirm(
-        `Voulez-vous valider ${selectedIds.value.length} archive(s) ?`,
-        () => {
-            router.post(route('gestionnaire.validate-all'), {
-                ids: selectedIds.value
-            }, {
-                onSuccess: () => {
-                    showNotify(`${selectedIds.value.length} archive(s) validée(s) avec succès`, 'success');
-                    selectedIds.value = [];
-                    selectAll.value = false;
-                    router.reload({ only: ['archives'] });
-                },
-                onError: () => {
-                    showNotify('Erreur lors de la validation en masse', 'error');
-                }
-            });
-        },
-        'Valider en masse'
-    );
 };
 
-const rejectAll = () => {
-    if (selectedIds.value.length === 0) {
-        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
-        return;
+const selectAll = (archives) => {
+    const ids = archives.map(a => a.id);
+    const allSelected = ids.every(id => selectedIds.value.includes(id));
+    if (allSelected) {
+        selectedIds.value = selectedIds.value.filter(id => !ids.includes(id));
+    } else {
+        ids.forEach(id => {
+            if (!selectedIds.value.includes(id)) {
+                selectedIds.value.push(id);
+            }
+        });
     }
-    showConfirm(
-        `Voulez-vous rejeter ${selectedIds.value.length} archive(s) ?`,
-        () => {
-            router.post(route('gestionnaire.reject-all'), {
-                ids: selectedIds.value,
-                comment: 'Rejeté en masse par le gestionnaire'
-            }, {
-                onSuccess: () => {
-                    showNotify(`${selectedIds.value.length} archive(s) rejetée(s)`, 'warning');
-                    selectedIds.value = [];
-                    selectAll.value = false;
-                    router.reload({ only: ['archives'] });
-                },
-                onError: () => {
-                    showNotify('Erreur lors du rejet en masse', 'error');
-                }
-            });
-        },
-        'Rejeter en masse'
-    );
 };
 
-const destroyAll = () => {
-    if (selectedIds.value.length === 0) {
-        showNotify('Veuillez sélectionner au moins une archive.', 'warning');
-        return;
-    }
-    showConfirm(
-        `⚠️ Voulez-vous SUPPRIMER définitivement ${selectedIds.value.length} archive(s) ? Cette action est irréversible !`,
-        () => {
-            router.post(route('gestionnaire.destroy-all'), {
-                ids: selectedIds.value
-            }, {
-                onSuccess: () => {
-                    showNotify(`${selectedIds.value.length} archive(s) supprimée(s)`, 'error');
-                    selectedIds.value = [];
-                    selectAll.value = false;
-                    router.reload({ only: ['archives'] });
-                },
-                onError: () => {
-                    showNotify('Erreur lors de la suppression en masse', 'error');
-                }
-            });
-        },
-        '⚠️ Supprimer en masse'
-    );
+// Prévisualisation (dans un dialogue)
+const previewFile = (archive) => {
+    currentFileUrl.value = route('gestionnaire.view', archive.id);
+    currentFileTitle.value = archive.titre;
+    previewDialog.value = true;
 };
 
-// Validation individuelle
+// Validation
 const validateArchive = (archive) => {
     showConfirm('Voulez-vous valider cette archive ?', () => {
         router.post(route('gestionnaire.validate', archive.id), {
             comment: 'Validé par le gestionnaire'
         }, {
             onSuccess: () => {
-                showNotify('Archive validée avec succès', 'success');
-                router.reload({ only: ['archives'] });
+                showNotification('✅ Archive validée');
+                router.reload({ only: ['pendingArchives'] });
             },
-            onError: () => {
-                showNotify('Erreur lors de la validation', 'error');
-            }
+            onError: () => showNotification('❌ Erreur lors de la validation', 'error'),
         });
     }, 'Valider l\'archive');
 };
 
-// Filtrage
-const updateSearch = debounce(() => {
-    router.get(route('gestionnaire.pending-archives'), {
-        search: search.value,
-        dossier_id: filterDossier.value,
-        type: filterType.value,
-        created_by: filterUser.value,
-        date_debut: filterDateDebut.value,
-        date_fin: filterDateFin.value
-    }, {
-        preserveState: true,
-        replace: true,
-        preserveScroll: true
-    });
-}, 400);
-
-const resetFilters = () => {
-    search.value = '';
-    filterDossier.value = null;
-    filterType.value = null;
-    filterUser.value = null;
-    filterDateDebut.value = null;
-    filterDateFin.value = null;
+// Rejet
+const openRejectDialog = (archive) => {
+    currentArchive.value = archive;
+    rejectReason.value = '';
+    rejectDialog.value = true;
 };
 
-// Formater les dates
+const confirmReject = () => {
+    if (!rejectReason.value.trim()) {
+        showNotification('Veuillez indiquer un motif.', 'error');
+        return;
+    }
+    router.post(route('gestionnaire.reject', currentArchive.value.id), {
+        comment: rejectReason.value
+    }, {
+        onSuccess: () => {
+            rejectDialog.value = false;
+            showNotification('❌ Archive rejetée');
+            router.reload({ only: ['pendingArchives'] });
+        },
+        onError: () => showNotification('❌ Erreur lors du rejet', 'error'),
+    });
+};
+
+// Suppression individuelle
+const deleteArchive = (archive) => {
+    showConfirm('⚠️ Supprimer définitivement cette archive ?', () => {
+        router.delete(route('gestionnaire.destroy', archive.id), {
+            onSuccess: () => {
+                showNotification('🗑️ Archive supprimée');
+                router.reload({ only: ['pendingArchives'] });
+            },
+            onError: () => showNotification('❌ Erreur lors de la suppression', 'error'),
+        });
+    }, 'Supprimer l\'archive');
+};
+
+// Actions en masse
+const validateAllSelected = () => {
+    if (selectedIds.value.length === 0) {
+        showNotification('Aucune archive sélectionnée.', 'error');
+        return;
+    }
+    showConfirm(`Valider ${selectedIds.value.length} archive(s) ?`, () => {
+        router.post(route('gestionnaire.validate-all'), {
+            ids: selectedIds.value
+        }, {
+            onSuccess: () => {
+                const count = selectedIds.value.length;
+                selectedIds.value = [];
+                showNotification(`✅ ${count} archives validées`);
+                router.reload({ only: ['pendingArchives'] });
+            },
+            onError: () => showNotification('❌ Erreur lors de la validation', 'error'),
+        });
+    }, 'Validation en masse');
+};
+
+const rejectAllSelected = () => {
+    if (selectedIds.value.length === 0) {
+        showNotification('Aucune archive sélectionnée.', 'error');
+        return;
+    }
+    rejectAllDialog.value = true;
+};
+
+const confirmRejectAll = () => {
+    if (!rejectAllReason.value.trim()) {
+        showNotification('Veuillez indiquer un motif.', 'error');
+        return;
+    }
+    router.post(route('gestionnaire.reject-all'), {
+        ids: selectedIds.value,
+        comment: rejectAllReason.value
+    }, {
+        onSuccess: () => {
+            rejectAllDialog.value = false;
+            const count = selectedIds.value.length;
+            selectedIds.value = [];
+            rejectAllReason.value = '';
+            showNotification(`❌ ${count} archives rejetées`);
+            router.reload({ only: ['pendingArchives'] });
+        },
+        onError: () => showNotification('❌ Erreur lors du rejet', 'error'),
+    });
+};
+
+const deleteAllSelected = () => {
+    if (selectedIds.value.length === 0) {
+        showNotification('Aucune archive sélectionnée.', 'error');
+        return;
+    }
+    showConfirm(`⚠️ Supprimer définitivement ${selectedIds.value.length} archive(s) ? Cette action est irréversible !`, () => {
+        router.post(route('gestionnaire.destroy-all'), {
+            ids: selectedIds.value
+        }, {
+            onSuccess: () => {
+                const count = selectedIds.value.length;
+                selectedIds.value = [];
+                showNotification(`🗑️ ${count} archives supprimées`);
+                router.reload({ only: ['pendingArchives'] });
+            },
+            onError: () => showNotification('❌ Erreur lors de la suppression', 'error'),
+        });
+    }, '⚠️ Suppression en masse');
+};
+
+// Utilitaires
 const formatDate = (date) => {
     if (!date) return '-';
     return new Date(date).toLocaleDateString('fr-FR');
@@ -255,23 +239,19 @@ const getDossierPath = (archive) => {
 </script>
 
 <template>
-
-    <Head title="Archives en attente de validation" />
+    <Head title="Archives en attente" />
     <AuthenticatedLayout>
-        <!-- SNACKBAR -->
-        <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="4000" rounded="lg">
+        <!-- Snackbar -->
+        <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="3000" class="mt-16">
             <v-icon start>{{ snackbar.color === 'success' ? 'mdi-check-circle' : 'mdi-alert-circle' }}</v-icon>
             {{ snackbar.text }}
-            <template v-slot:actions>
-                <v-btn variant="text" @click="snackbar.show = false">Fermer</v-btn>
-            </template>
         </v-snackbar>
 
-        <!-- DIALOGUE DE CONFIRMATION -->
+        <!-- Dialogue de confirmation personnalisé -->
         <v-dialog v-model="confirmDialog" max-width="450px" persistent>
             <v-card class="rounded-xl">
-                <v-toolbar color="primary" dark>
-                    <v-icon start>mdi-check-circle</v-icon>
+                <v-toolbar :color="confirmTitle.includes('Supprimer') ? 'error' : 'primary'" dark class="rounded-t-xl">
+                    <v-icon start>{{ confirmTitle.includes('Supprimer') ? 'mdi-delete' : 'mdi-alert-circle' }}</v-icon>
                     <v-toolbar-title>{{ confirmTitle }}</v-toolbar-title>
                     <v-spacer></v-spacer>
                     <v-btn icon="mdi-close" variant="text" @click="confirmDialog = false"></v-btn>
@@ -284,225 +264,223 @@ const getDossierPath = (archive) => {
                 <v-card-actions class="pa-4 bg-grey-lighten-5">
                     <v-spacer></v-spacer>
                     <v-btn variant="text" @click="confirmDialog = false" rounded="lg">Annuler</v-btn>
-                    <v-btn color="primary" variant="flat" @click="executeConfirm" rounded="lg"
-                        class="px-6">Valider</v-btn>
+                    <v-btn :color="confirmTitle.includes('Supprimer') ? 'error' : 'primary'" variant="flat"
+                        @click="executeConfirm" rounded="lg" class="px-6">Confirmer</v-btn>
                 </v-card-actions>
             </v-card>
         </v-dialog>
 
-        <!-- DIALOGUE DE REJET -->
-        <v-dialog v-model="rejectDialog" max-width="500px" persistent>
+        <!-- Dialogue de prévisualisation -->
+        <v-dialog v-model="previewDialog" width="95%" max-width="1200px">
+            <v-card rounded="xl">
+                <v-toolbar color="primary" density="comfortable" class="rounded-t-xl">
+                    <v-icon start class="ml-4">mdi-file-eye</v-icon>
+                    <v-toolbar-title class="text-body-1">{{ currentFileTitle }}</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="previewDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <iframe :src="currentFileUrl" width="100%" style="height: 85vh; border: none;"></iframe>
+            </v-card>
+        </v-dialog>
+
+        <!-- Dialogue Rejet individuel -->
+        <v-dialog v-model="rejectDialog" max-width="450px">
             <v-card class="rounded-xl">
-                <v-toolbar color="error" dark>
+                <v-toolbar color="error" dark class="rounded-t-xl">
                     <v-icon start>mdi-close-circle</v-icon>
                     <v-toolbar-title>Rejeter l'archive</v-toolbar-title>
                     <v-spacer></v-spacer>
                     <v-btn icon="mdi-close" variant="text" @click="rejectDialog = false"></v-btn>
                 </v-toolbar>
                 <v-divider></v-divider>
-                <v-card-text class="pa-6">
-                    <div class="text-body-1 mb-4">
-                        Vous êtes sur le point de rejeter l'archive : <strong>{{ rejectArchive?.titre }}</strong>
-                    </div>
-                    <v-form @submit.prevent="confirmReject">
-                        <v-textarea v-model="rejectForm.comment" label="Motif du rejet" variant="outlined"
-                            density="comfortable" rows="3" :error-messages="rejectForm.errors.comment" required
-                            hint="Veuillez indiquer la raison du rejet" persistent-hint></v-textarea>
-                        <div class="d-flex justify-end mt-4">
-                            <v-btn variant="text" @click="rejectDialog = false" :disabled="rejectForm.processing">
-                                Annuler
-                            </v-btn>
-                            <v-btn color="error" type="submit" :loading="rejectForm.processing" class="ml-2">
-                                Rejeter
-                            </v-btn>
-                        </div>
-                    </v-form>
+                <v-card-text class="pa-4">
+                    <p class="mb-2 text-body-2 font-weight-medium">{{ currentArchive?.titre }}</p>
+                    <v-textarea v-model="rejectReason" label="Motif du rejet" rows="2" density="compact" required></v-textarea>
                 </v-card-text>
+                <v-divider></v-divider>
+                <v-card-actions class="pa-3">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" @click="rejectDialog = false">Annuler</v-btn>
+                    <v-btn color="error" @click="confirmReject">Rejeter</v-btn>
+                </v-card-actions>
             </v-card>
         </v-dialog>
 
-        <!-- CARD PRINCIPALE -->
-        <v-card elevation="1" class="rounded-xl overflow-hidden">
-            <v-toolbar color="white" border-bottom class="px-4 py-2">
-                <v-icon icon="mdi-account-check" color="primary" size="28" class="mr-3"></v-icon>
-                <div>
-                    <div class="text-h6 font-weight-bold">Archives en attente de validation</div>
-                    <div class="text-caption text-grey">Valider ou rejeter les archives soumises par les archivistes
-                    </div>
-                </div>
+        <!-- Dialogue Rejet en masse -->
+        <v-dialog v-model="rejectAllDialog" max-width="450px">
+            <v-card class="rounded-xl">
+                <v-toolbar color="error" dark class="rounded-t-xl">
+                    <v-icon start>mdi-close-circle</v-icon>
+                    <v-toolbar-title>Rejeter en masse</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="rejectAllDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <v-card-text class="pa-4">
+                    <p class="mb-2 text-body-2">{{ selectedIds.length }} archive(s) sélectionnée(s)</p>
+                    <v-textarea v-model="rejectAllReason" label="Motif du rejet" rows="2" density="compact" required></v-textarea>
+                </v-card-text>
+                <v-divider></v-divider>
+                <v-card-actions class="pa-3">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" @click="rejectAllDialog = false">Annuler</v-btn>
+                    <v-btn color="error" @click="confirmRejectAll">Tout rejeter</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- Carte principale -->
+        <v-card elevation="2" class="rounded-xl">
+            <!-- En-tête -->
+            <v-toolbar color="primary" dark class="rounded-t-xl" density="compact">
+                <v-icon start class="ml-2">mdi-account-check</v-icon>
+                <v-toolbar-title class="text-subtitle-1 font-weight-bold">Archives en attente</v-toolbar-title>
                 <v-spacer></v-spacer>
-                <v-text-field v-model="search" prepend-inner-icon="mdi-magnify" placeholder="Rechercher..."
-                    variant="outlined" hide-details density="comfortable" style="max-width: 300px;"></v-text-field>
+                <v-text-field
+                    v-model="searchQuery"
+                    prepend-inner-icon="mdi-magnify"
+                    placeholder="Rechercher..."
+                    variant="solo-filled"
+                    density="compact"
+                    hide-details
+                    flat
+                    class="mx-2"
+                    style="max-width: 220px;"
+                ></v-text-field>
+                <v-chip color="warning" size="small" class="ml-2">{{ pendingArchives.length }}</v-chip>
             </v-toolbar>
 
-            <!-- ACTIONS EN MASSE -->
-            <div v-if="selectedCount > 0"
-                class="bg-blue-lighten-5 px-4 py-2 border-bottom d-flex align-center flex-wrap gap-3">
-                <v-chip color="primary" size="small">
-                    <v-icon start size="small">mdi-check-all</v-icon>
-                    {{ selectedCount }} sélectionné(s)
-                </v-chip>
-                <v-btn color="success" size="small" variant="flat" @click="validateAll" prepend-icon="mdi-check-all">
-                    Valider tout
-                </v-btn>
-                <v-btn color="warning" size="small" variant="flat" @click="rejectAll" prepend-icon="mdi-close-circle">
-                    Rejeter tout
-                </v-btn>
-                <v-btn color="error" size="small" variant="flat" @click="destroyAll" prepend-icon="mdi-delete-sweep">
-                    Supprimer tout
-                </v-btn>
-                <v-btn variant="text" size="small" @click="selectedIds = []; selectAll = false">
-                    Désélectionner tout
-                </v-btn>
-            </div>
-
-            <!-- FILTRES -->
-            <div class="bg-grey-lighten-4 px-4 py-2 border-bottom d-flex align-center flex-wrap gap-3">
-                <v-select v-model="filterUser" :items="users" item-title="name" item-value="id" label="Archiviste"
-                    variant="solo" density="compact" hide-details flat clearable style="max-width: 180px;">
-                    <template v-slot:prepend-inner>
-                        <v-icon color="primary" size="small">mdi-account</v-icon>
-                    </template>
-                </v-select>
-
-                <v-select v-model="filterDossier" :items="dossiers" item-title="nom" item-value="id" label="Dossier"
-                    variant="solo" density="compact" hide-details flat clearable style="max-width: 200px;"></v-select>
-
-                <v-select v-model="filterType" :items="type_documents" label="Format" variant="solo" density="compact"
-                    hide-details flat clearable style="max-width: 120px;"></v-select>
-
-                <v-text-field v-model="filterDateDebut" type="date" label="Depuis le" variant="solo" density="compact"
-                    hide-details flat style="max-width: 160px;"></v-text-field>
-
-                <v-text-field v-model="filterDateFin" type="date" label="Jusqu'au" variant="solo" density="compact"
-                    hide-details flat style="max-width: 160px;"></v-text-field>
-
-                <v-btn variant="text" color="error" size="small" @click="resetFilters" prepend-icon="mdi-filter-off">
-                    Réinitialiser
-                </v-btn>
-            </div>
-
-            <!-- STATISTIQUES -->
-            <div class="px-4 py-2 bg-grey-lighten-3 border-bottom">
-                <div class="d-flex align-center gap-4">
-                    <span class="text-caption font-weight-bold">Total en attente :</span>
-                    <v-chip color="warning" size="small">
-                        <v-icon start size="x-small">mdi-clock-outline</v-icon>
-                        {{ archives.total || 0 }} archive(s)
-                    </v-chip>
-                    <span v-if="selectedCount > 0" class="text-caption text-primary">
-                        {{ selectedCount }} sélectionnée(s)
-                    </span>
+            <v-card-text class="pa-2">
+                <!-- Actions en masse -->
+                <div v-if="selectedIds.length > 0" class="d-flex align-center ga-2 pa-2 mb-2 bg-blue-lighten-5 rounded-lg flex-wrap">
+                    <v-chip color="primary" size="x-small" class="font-weight-bold">{{ selectedIds.length }}</v-chip>
+                    <span class="text-caption text-grey">sélectionnée(s)</span>
+                    <v-divider vertical class="mx-1"></v-divider>
+                    <v-btn color="success" size="x-small" variant="flat" @click="validateAllSelected" prepend-icon="mdi-check-all">Valider</v-btn>
+                    <v-btn color="warning" size="x-small" variant="flat" @click="rejectAllSelected" prepend-icon="mdi-close-all">Rejeter</v-btn>
+                    <v-btn color="error" size="x-small" variant="flat" @click="deleteAllSelected" prepend-icon="mdi-delete-sweep">Supprimer</v-btn>
+                    <v-btn size="x-small" variant="text" @click="selectedIds = []">×</v-btn>
                 </div>
-            </div>
 
-            <!-- TABLEAU -->
-            <v-table hover>
-                <thead>
-                    <tr class="bg-grey-lighten-4">
-                        <th style="width:40px">
-                            <v-checkbox v-model="selectAll" @update:model-value="toggleSelectAll"
-                                hide-details></v-checkbox>
-                        </th>
-                        <th class="text-overline">Référence</th>
-                        <th class="text-overline">Titre</th>
-                        <th class="text-overline">Archiviste</th>
-                        <th class="text-overline">Emplacement</th>
-                        <th class="text-overline">Date</th>
-                        <th class="text-overline text-center">Format</th>
-                        <th class="text-overline text-center">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="archive in archives.data" :key="archive.id"
-                        :class="{ 'bg-blue-lighten-5': selectedIds.includes(archive.id) }">
-                        <td>
-                            <v-checkbox :model-value="selectedIds.includes(archive.id)"
-                                @update:model-value="toggleSelect(archive.id)" hide-details></v-checkbox>
-                        </td>
-                        <td class="font-weight-bold text-primary">{{ archive.reference }}</td>
-                        <td>{{ archive.titre }}</td>
-                        <td>
-                            <v-chip size="x-small" color="blue" variant="tonal">
-                                <v-icon start size="x-small">mdi-account</v-icon>
-                                {{ archive.createur?.name || 'Inconnu' }}
-                            </v-chip>
-                        </td>
-                        <td>
-                            <v-chip size="x-small" color="primary" variant="tonal">
-                                {{ getDossierPath(archive) }}
-                            </v-chip>
-                        </td>
-                        <td>{{ formatDate(archive.date_document) }}</td>
-                        <td class="text-center">
-                            <v-icon :color="getFileColor(archive.type_document)" size="small">
-                                {{ getFileIcon(archive.type_document) }}
-                            </v-icon>
-                        </td>
-                        <td class="text-center">
-                            <div class="d-flex align-center justify-center gap-1">
-                                <v-btn icon="mdi-eye" size="small" variant="text" color="info"
-                                    :href="route('gestionnaire.view', archive.id)" target="_blank"
-                                    title="Visualiser"></v-btn>
-                                <v-btn icon="mdi-download" size="small" variant="text" color="primary"
-                                    :href="route('gestionnaire.download', archive.id)" title="Télécharger"></v-btn>
-                                <v-btn icon="mdi-check" size="small" variant="flat" color="success"
-                                    @click="validateArchive(archive)" title="Valider"></v-btn>
-                                <v-btn icon="mdi-close" size="small" variant="flat" color="error"
-                                    @click="openRejectDialog(archive)" title="Rejeter"></v-btn>
+                <!-- Groupes par archiviste -->
+                <v-row v-for="group in archivesByArchiviste" :key="group.id" class="mb-2" dense>
+                    <v-col cols="12" class="pa-1">
+                        <v-card class="rounded-lg" variant="outlined">
+                            <!-- En-tête groupe -->
+                            <div class="d-flex align-center pa-2 bg-grey-lighten-4 rounded-t-lg" style="cursor:pointer; min-height: 36px;" @click="expandedArchiviste = expandedArchiviste === group.id ? null : group.id">
+                                <v-checkbox
+                                    :model-value="group.archives.every(a => selectedIds.includes(a.id))"
+                                    @click.stop="selectAll(group.archives)"
+                                    hide-details
+                                    density="compact"
+                                    class="mr-1"
+                                ></v-checkbox>
+                                <v-icon start size="small">mdi-account</v-icon>
+                                <span class="font-weight-medium text-body-2">{{ group.name }}</span>
+                                <v-chip size="x-small" color="primary" class="ml-2">{{ group.archives.length }}</v-chip>
+                                <v-spacer></v-spacer>
+                                <v-icon size="small">{{ expandedArchiviste === group.id ? 'mdi-chevron-up' : 'mdi-chevron-down' }}</v-icon>
                             </div>
-                        </td>
-                    </tr>
-                    <tr v-if="archives.data.length === 0">
-                        <td colspan="8" class="text-center py-12 text-grey">
-                            <v-icon size="48" color="grey-lighten-2" class="mb-3">mdi-check-circle</v-icon>
-                            <div class="text-h6 text-grey-lighten-1">Aucune archive en attente</div>
-                            <div class="text-caption text-grey mt-2">Toutes les archives ont été traitées</div>
-                        </td>
-                    </tr>
-                </tbody>
-            </v-table>
 
-            <!-- PAGINATION -->
-            <v-divider></v-divider>
-            <div class="pa-3 bg-grey-lighten-5 d-flex align-center justify-space-between">
-                <div class="text-caption text-grey-darken-1">
-                    Affichage de {{ archives.from || 0 }} à {{ archives.to || 0 }} sur {{ archives.total }} archives
-                    <span v-if="selectedCount > 0" class="text-primary ml-2">
-                        ({{ selectedCount }} sélectionnée(s))
-                    </span>
+                            <!-- Tableau -->
+                            <v-expand-transition>
+                                <div v-if="expandedArchiviste === group.id">
+                                    <v-table density="compact" hover>
+                                        <thead>
+                                            <tr class="bg-grey-lighten-5">
+                                                <th style="width: 30px; padding: 2px 6px;">
+                                                    <v-checkbox
+                                                        :model-value="group.archives.every(a => selectedIds.includes(a.id))"
+                                                        @update:model-value="selectAll(group.archives)"
+                                                        hide-details
+                                                        density="compact"
+                                                    ></v-checkbox>
+                                                </th>
+                                                <th class="text-caption font-weight-bold" style="padding: 2px 6px;">Réf.</th>
+                                                <th class="text-caption font-weight-bold" style="padding: 2px 6px;">Titre</th>
+                                                <th class="text-caption font-weight-bold text-center" style="padding: 2px 6px;">Format</th>
+                                                <th class="text-caption font-weight-bold text-center" style="padding: 2px 6px; width: 160px;">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="archive in group.archives" :key="archive.id" :class="{ 'bg-blue-lighten-5': selectedIds.includes(archive.id) }">
+                                                <td style="padding: 1px 6px;">
+                                                    <v-checkbox
+                                                        :model-value="selectedIds.includes(archive.id)"
+                                                        @update:model-value="toggleSelect(archive.id)"
+                                                        hide-details
+                                                        density="compact"
+                                                    ></v-checkbox>
+                                                </td>
+                                                <td style="padding: 1px 6px;">
+                                                    <span class="text-primary font-weight-medium text-caption">{{ archive.reference }}</span>
+                                                </td>
+                                                <td style="padding: 1px 6px; max-width: 200px;">
+                                                    <span class="text-truncate text-caption d-block">{{ archive.titre }}</span>
+                                                </td>
+                                                <td class="text-center" style="padding: 1px 6px;">
+                                                    <v-icon :color="getFileColor(archive.type_document)" size="x-small">
+                                                        {{ getFileIcon(archive.type_document) }}
+                                                    </v-icon>
+                                                </td>
+                                                <td class="text-center" style="padding: 1px 6px;">
+                                                    <div class="d-flex align-center justify-center ga-1">
+                                                        <!-- 👁️ Œil : ouvre le dialogue -->
+                                                        <v-btn icon="mdi-eye" size="x-small" variant="text" color="info" @click="previewFile(archive)" title="Visualiser"></v-btn>
+                                                        <!-- ⬇️ Téléchargement -->
+                                                        <v-btn icon="mdi-download" size="x-small" variant="text" color="primary" :href="route('gestionnaire.download', archive.id)" title="Télécharger"></v-btn>
+                                                        <!-- ✅ Valider -->
+                                                        <v-btn icon="mdi-check" size="x-small" variant="flat" color="success" @click="validateArchive(archive)" title="Valider"></v-btn>
+                                                        <!-- ❌ Rejeter -->
+                                                        <v-btn icon="mdi-close" size="x-small" variant="flat" color="error" @click="openRejectDialog(archive)" title="Rejeter"></v-btn>
+                                                        <!-- 🗑️ Supprimer -->
+                                                        <v-btn icon="mdi-delete" size="x-small" variant="flat" color="error" @click="deleteArchive(archive)" title="Supprimer"></v-btn>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+                                </div>
+                            </v-expand-transition>
+                        </v-card>
+                    </v-col>
+                </v-row>
+
+                <!-- Message vide -->
+                <div v-if="pendingArchives.length === 0" class="text-center py-8">
+                    <v-icon size="48" color="grey-lighten-2" class="mb-2">mdi-check-circle</v-icon>
+                    <div class="text-h6 text-grey-lighten-1">Aucune archive en attente</div>
+                    <div class="text-caption text-grey mt-1">Toutes les archives ont été traitées</div>
                 </div>
-                <div class="d-flex gap-1">
-                    <v-btn v-for="(link, k) in archives.links" :key="k" :disabled="link.url === null"
-                        :variant="link.active ? 'flat' : 'text'" :color="link.active ? 'primary' : 'grey-darken-1'"
-                        size="small" class="px-2"
-                        @click="link.url ? router.get(link.url, {}, { preserveState: true, preserveScroll: true }) : null"
-                        v-html="link.label"></v-btn>
-                </div>
-            </div>
+            </v-card-text>
         </v-card>
     </AuthenticatedLayout>
 </template>
 
 <style scoped>
-.gap-3 {
-    gap: 12px;
-}
-
-.gap-1 {
-    gap: 4px;
-}
-
+.ga-1 { gap: 4px; }
+.ga-2 { gap: 8px; }
 .v-table :deep(th) {
+    font-size: 0.6rem !important;
     font-weight: 600;
-    font-size: 0.75rem;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    background-color: #f5f5f5;
+    letter-spacing: 0.3px;
+    color: #666;
 }
-
 .v-table :deep(td) {
-    font-size: 0.875rem;
-    padding: 12px 16px;
+    font-size: 0.7rem !important;
+    padding: 1px 6px !important;
+}
+.v-table :deep(.v-checkbox) {
+    margin: 0 !important;
+}
+.text-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.d-block {
+    display: block;
 }
 </style>

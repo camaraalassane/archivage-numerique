@@ -23,14 +23,12 @@ class ArchiveController extends Controller
         $query = Archive::query()
             ->with(['dossier.mois.annee', 'createur', 'validateur']);
 
-        // === FILTRES PAR RÔLE ===
         if ($user->isArchiviste()) {
             $query->where('created_by', $user->id);
         } else if ($user->isDivision()) {
             $query->where('validation_status', Archive::STATUS_VALIDATED);
         }
 
-        // === FILTRES DE RECHERCHE ===
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($sub) use ($search) {
                 $sub->where('titre', 'like', "%{$search}%")
@@ -46,7 +44,7 @@ class ArchiveController extends Controller
 
         return Inertia::render('Archives/Index', [
             'filters' => $request->all(['search', 'dossier_id', 'type', 'date_debut', 'date_fin', 'validation_status']),
-            'archives' => $query->latest()->paginate(10)->withQueryString(),
+            'archives' => $query->latest()->paginate(50)->withQueryString(),
             'dossiers' => Dossier::with(['mois.annee'])->orderBy('nom')->get(['id', 'nom', 'mois_id', 'couleur']),
             'type_documents' => Archive::select('type_document')->distinct()->pluck('type_document'),
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
@@ -66,12 +64,8 @@ class ArchiveController extends Controller
         ]);
     }
 
-    /**
-     * Vérifier si un document existe déjà
-     */
     private function checkDuplicate($reference, $dossierId, $fileName = null)
     {
-        // 1. Vérification par référence exacte
         $existing = Archive::where('reference', $reference)
             ->where('dossier_id', $dossierId)
             ->first();
@@ -84,7 +78,6 @@ class ArchiveController extends Controller
             ];
         }
 
-        // 2. Vérification par nom de fichier (si fourni)
         if ($fileName) {
             $existingByName = Archive::where('fichier_nom_original', $fileName)
                 ->where('dossier_id', $dossierId)
@@ -99,7 +92,6 @@ class ArchiveController extends Controller
             }
         }
 
-        // 3. Vérification par titre (approche plus souple)
         if ($fileName) {
             $titreBase = pathinfo($fileName, PATHINFO_FILENAME);
             if ($titreBase) {
@@ -120,9 +112,6 @@ class ArchiveController extends Controller
         return ['exists' => false];
     }
 
-    /**
-     * Vérifier les doublons pour plusieurs fichiers
-     */
     public function checkDuplicates(Request $request)
     {
         $request->validate([
@@ -136,7 +125,6 @@ class ArchiveController extends Controller
         $fileNames = $request->fichiers;
 
         foreach ($fileNames as $fileName) {
-            // Vérification par nom de fichier
             $existing = Archive::where('fichier_nom_original', $fileName)
                 ->where('dossier_id', $dossierId)
                 ->first();
@@ -150,7 +138,6 @@ class ArchiveController extends Controller
                     'status' => $existing->validation_status
                 ];
             } else {
-                // Vérification par titre
                 $titreBase = pathinfo($fileName, PATHINFO_FILENAME);
                 if ($titreBase) {
                     $existingByTitle = Archive::where('titre', 'LIKE', $titreBase . '%')
@@ -177,9 +164,6 @@ class ArchiveController extends Controller
         ]);
     }
 
-    /**
-     * Valider ou rejeter une archive
-     */
     public function validateArchive(Request $request, Archive $archive)
     {
         $user = Auth::user();
@@ -204,6 +188,23 @@ class ArchiveController extends Controller
         return redirect()->back()->with('success', "Archive {$statusLabel} avec succès.");
     }
 
+    private function generateUniqueReference(string $base): string
+    {
+        $cleaned = preg_replace('/[^A-Z0-9]/', '_', strtoupper($base));
+        $cleaned = substr($cleaned, 0, 35);
+        $reference = $cleaned . '_' . time() . '_' . substr(uniqid(), -4);
+        $counter = 0;
+        while (Archive::where('reference', $reference)->exists()) {
+            $counter++;
+            $reference = $cleaned . '_' . time() . '_' . $counter . '_' . substr(uniqid(), -4);
+            if ($counter > 10) {
+                $reference = $cleaned . '_' . uniqid() . '_' . rand(1000, 9999);
+                break;
+            }
+        }
+        return substr($reference, 0, 50);
+    }
+
     public function store(Request $request)
     {
         try {
@@ -223,7 +224,6 @@ class ArchiveController extends Controller
                 'description' => 'nullable|string',
             ]);
 
-            // 🔥 VÉRIFICATION DES DOUBLONS
             $reference = $validated['reference'];
             $dossierId = $validated['dossier_id'];
             $fileName = $request->file('fichier')->getClientOriginalName();
@@ -261,9 +261,11 @@ class ArchiveController extends Controller
                 return redirect()->back()->with('error', 'Erreur lors du stockage du fichier.');
             }
 
+            $uniqueReference = $this->generateUniqueReference($validated['reference']);
+
             $archive = Archive::create([
                 'titre' => $request->titre,
-                'reference' => $validated['reference'],
+                'reference' => $uniqueReference,
                 'description' => $request->description,
                 'dossier_id' => $request->dossier_id,
                 'type_document' => $file->getClientOriginalExtension(),
@@ -330,11 +332,9 @@ class ArchiveController extends Controller
             foreach ($request->file('fichiers') as $index => $file) {
                 $originalName = $file->getClientOriginalName();
 
-                // 🔥 VÉRIFICATION DES DOUBLONS POUR CHAQUE FICHIER
                 $rawRef = $references[$index] ?? pathinfo($originalName, PATHINFO_FILENAME);
                 $cleanedRef = preg_replace('/[^A-Z0-9]/', '_', strtoupper($rawRef));
 
-                // Référence temporaire pour vérification
                 $microtimeToken = substr(str_replace('.', '', microtime(true)), -5);
                 $tempRef = substr($cleanedRef, 0, 25) . '_' . $index . '_' . $microtimeToken;
 
@@ -349,7 +349,6 @@ class ArchiveController extends Controller
                     continue;
                 }
 
-                // Génération de la référence unique
                 $suffix = '_' . $index . '_' . $microtimeToken;
                 $baseReference = substr($cleanedRef, 0, 50 - strlen($suffix));
                 $reference = $baseReference . $suffix;
@@ -400,7 +399,6 @@ class ArchiveController extends Controller
                 }
             }
 
-            // Construction du message de retour
             $message = $imported . ' fichier(s) archivé(s) avec succès. En attente de validation.';
 
             if ($errors > 0) {
@@ -413,7 +411,6 @@ class ArchiveController extends Controller
                 }
             }
 
-            // Log des doublons
             if (count($duplicates) > 0) {
                 \Log::warning('Doublons détectés lors de l\'import multiple', [
                     'dossier_id' => $dossier->id,

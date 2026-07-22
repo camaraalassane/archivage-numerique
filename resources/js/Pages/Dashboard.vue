@@ -60,7 +60,7 @@ const isLoadingArchives = ref(false);
 const currentDossierId = ref(null);
 const archivesPagination = ref(null);
 const currentPage = ref(1);
-const perPage = ref(10);
+const perPage = ref(50);
 
 // ÉTATS DIALOGUES
 const uploadDialog = ref(false);

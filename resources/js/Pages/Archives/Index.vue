@@ -64,6 +64,17 @@ const executeConfirm = () => {
     confirmDialog.value = false;
 };
 
+// 🔥 DIALOGUE DE PRÉVISUALISATION
+const previewDialog = ref(false);
+const currentFileUrl = ref('');
+const currentFileTitle = ref('');
+
+const previewFile = (archive) => {
+    currentFileUrl.value = route('archives.view', archive.id);
+    currentFileTitle.value = archive.titre;
+    previewDialog.value = true;
+};
+
 const dialog = ref(false);
 const isEditing = ref(false);
 const editingId = ref(null);
@@ -535,7 +546,6 @@ const formatSize = (bytes) => {
 </script>
 
 <template>
-
     <Head title="Gestion des Archives" />
     <AuthenticatedLayout>
         <!-- SNACKBAR -->
@@ -567,6 +577,20 @@ const formatSize = (bytes) => {
                     <v-btn :color="confirmTitle.includes('Supprimer') ? 'error' : 'primary'" variant="flat"
                         @click="executeConfirm" rounded="lg" class="px-6">Confirmer</v-btn>
                 </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- 🔥 DIALOGUE DE PRÉVISUALISATION -->
+        <v-dialog v-model="previewDialog" width="95%" max-width="1200px">
+            <v-card rounded="xl">
+                <v-toolbar color="primary" density="comfortable" class="rounded-t-xl">
+                    <v-icon start class="ml-4">mdi-file-eye</v-icon>
+                    <v-toolbar-title class="text-body-1">{{ currentFileTitle }}</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="previewDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <iframe :src="currentFileUrl" width="100%" style="height: 85vh; border: none;"></iframe>
             </v-card>
         </v-dialog>
 
@@ -628,8 +652,9 @@ const formatSize = (bytes) => {
                                     getFileIcon(archive.type_document) }}</v-icon>
                             </td>
                             <td class="text-right">
+                                <!-- 🔥 ŒIL : Ouvre le dialogue de prévisualisation -->
                                 <v-btn icon="mdi-eye" variant="text" color="info"
-                                    :href="route('archives.view', archive.id)" target="_blank"></v-btn>
+                                    @click="previewFile(archive)" title="Visualiser"></v-btn>
                                 <v-btn icon="mdi-download" variant="text" color="primary"
                                     :href="route('archives.download', archive.id)"></v-btn>
                                 <v-btn v-if="canEdit" icon="mdi-pencil" variant="text" color="primary"

@@ -47,6 +47,14 @@ return [
             'report' => false,
         ],
 
+        // 🔥 DISQUE POUR LE STOCKAGE DES ARCHIVES (serveur distant 10.10.22.233) 🔥
+        'archives' => [
+            'driver' => 'local',
+            'root'   => '/var/www/html/archives_remote',
+            'throw'  => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
