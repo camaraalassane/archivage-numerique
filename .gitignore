@@ -22,3 +22,11 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+*.bak
+Dockerfile
+docker-compose.yml
+nginx.conf
+php.ini
+public/images/
+storage/
+bootstrap/cache/
