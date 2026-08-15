@@ -66,6 +66,7 @@ const currentPage = computed(() => {
     if (componentName === 'Stats/Index') return 'Stats';
     if (componentName === 'Users/Index') return 'Users';
     if (componentName === 'Import/Index') return 'Import';
+    if (componentName === 'ActivityLogs/Index') return 'ActivityLogs';
     if (componentName === 'Archiviste/PendingRejected') return 'PendingRejected';
     if (componentName === 'Gestionnaire/PendingArchives') return 'PendingArchives';
     return null;
@@ -171,6 +172,11 @@ const logout = () => {
                         <!-- Utilisateurs : UNIQUEMENT ADMIN -->
                         <v-tab v-if="canManageUsers" value="Users" :tag="Link" :href="route('users.index')">
                             <v-icon start>mdi-account-group</v-icon> Utilisateurs
+                        </v-tab>
+                        
+                        <!-- Journal Événements : UNIQUEMENT ADMIN -->
+                        <v-tab v-if="canManageUsers" value="ActivityLogs" :tag="Link" :href="route('activity-logs.index')">
+                            <v-icon start>mdi-history</v-icon> Journal
                         </v-tab>
 
                         <!-- Archives en attente/rejetées : UNIQUEMENT ARCHIVISTE -->

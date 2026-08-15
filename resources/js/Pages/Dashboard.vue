@@ -70,6 +70,34 @@ const previewDialog = ref(false);
 const currentFileUrl = ref('');
 const currentFileTitle = ref('');
 
+// DRAG & DROP
+const isDragging = ref(false);
+const onDrop = (event) => {
+    isDragging.value = false;
+    const files = event.dataTransfer.files;
+    if (files && files.length > 0) {
+        if (!multipleMode.value && files.length > 1) {
+            showNotify('Mode fichier unique : un seul fichier a été conservé.', 'warning');
+            form.fichier = files[0];
+            return;
+        }
+        
+        if (multipleMode.value) {
+            if (folderMode.value) {
+                // Simulation de l'événement onChange
+                onFolderSelect({ target: { files: files } });
+            } else {
+                form.fichiers = Array.from(files);
+            }
+        } else {
+            form.fichier = files[0];
+        }
+    }
+};
+
+// DIALOGUE ARCHIVES RÉCENTES
+const recentDialog = ref(false);
+
 // MODES D'IMPORTATION
 const multipleMode = ref(false);
 const folderMode = ref(false);
@@ -623,6 +651,11 @@ const getFileColor = (ext) => {
                     variant="solo-filled" density="compact" hide-details rounded="lg" flat class="mx-4 d-none d-sm-flex"
                     style="max-width: 250px;" clearable></v-text-field>
 
+                <v-btn color="secondary" prepend-icon="mdi-history" variant="tonal" rounded="lg" size="small" 
+                    @click="recentDialog = true" class="mr-2 px-4 d-none d-md-flex">
+                    10 Récentes
+                </v-btn>
+
                 <v-btn v-if="currentView === 'files' && canArchive" color="primary" prepend-icon="mdi-cloud-upload"
                     variant="flat" rounded="lg" size="small" @click="openUploadDialog" class="mr-4 px-4">
                     Archiver
@@ -869,12 +902,12 @@ const getFileColor = (ext) => {
                                     <v-icon left>{{ folderMode ? 'mdi-folder-open' : 'mdi-folder' }}</v-icon>
                                     {{ folderMode ? 'Dossier sélectionné' : 'Sélectionner un dossier' }}
                                 </v-btn>
-                                <div class="text-caption text-grey mt-1">
-                                    <span v-if="folderMode">
-                                        {{ folderFiles.length }} fichier(s) trouvé(s) dans le dossier
-                                    </span>
-                                    <span v-else>
-                                        Sélectionnez un dossier pour importer tous les fichiers
+                                <div class="text-caption mt-2">
+                                    <v-alert v-if="folderMode && folderFiles.length > 0" type="info" variant="tonal" density="compact">
+                                        Prêt à importer <strong>{{ folderFiles.length }} fichier(s)</strong>. Veuillez valider en cliquant sur "Archiver".
+                                    </v-alert>
+                                    <span v-else-if="!folderMode" class="text-grey">
+                                        Sélectionnez le dossier contenant les fichiers
                                     </span>
                                 </div>
                             </div>
@@ -972,31 +1005,49 @@ const getFileColor = (ext) => {
                             </v-col>
 
                             <v-col cols="12" v-if="!isEditing && !multipleMode">
-                                <v-file-input v-model="form.fichier" label="Choisir le fichier (PDF, Images, Word...)"
-                                    variant="outlined" prepend-icon="mdi-paperclip" show-size
-                                    :error-messages="form.errors.fichier"
-                                    accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
-                                    <template v-slot:selection="{ fileNames }">
-                                        <template v-for="fileName in fileNames" :key="fileName">
-                                            <v-chip size="small" color="primary" class="mr-2">{{ fileName }}</v-chip>
+                                <div class="dropzone-area" :class="{ 'is-dragging': isDragging }" 
+                                     @dragover.prevent="isDragging = true" 
+                                     @dragleave.prevent="isDragging = false" 
+                                     @drop.prevent="onDrop">
+                                    <div class="text-center mb-3">
+                                        <v-icon size="40" :color="isDragging ? 'primary' : 'grey'">mdi-cloud-upload-outline</v-icon>
+                                        <div class="text-caption mt-2">Glissez et déposez votre fichier ici, ou cliquez ci-dessous</div>
+                                    </div>
+                                    <v-file-input v-model="form.fichier" label="Choisir le fichier (PDF, Images, Word...)"
+                                        variant="outlined" prepend-icon="mdi-paperclip" show-size
+                                        :error-messages="form.errors.fichier"
+                                        accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
+                                        <template v-slot:selection="{ fileNames }">
+                                            <template v-for="fileName in fileNames" :key="fileName">
+                                                <v-chip size="small" color="primary" class="mr-2">{{ fileName }}</v-chip>
+                                            </template>
                                         </template>
-                                    </template>
-                                </v-file-input>
+                                    </v-file-input>
+                                </div>
                             </v-col>
 
                             <v-col cols="12" v-if="!isEditing && multipleMode && !folderMode">
-                                <v-file-input v-model="form.fichiers"
-                                    label="Choisir plusieurs fichiers (PDF, Images, Word...)" variant="outlined"
-                                    prepend-icon="mdi-paperclip" show-size multiple counter
-                                    :error-messages="form.errors.fichiers"
-                                    accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
-                                    <template v-slot:selection="{ fileNames }">
-                                        <template v-for="fileName in fileNames" :key="fileName">
-                                            <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
-                                            }}</v-chip>
+                                <div class="dropzone-area" :class="{ 'is-dragging': isDragging }" 
+                                     @dragover.prevent="isDragging = true" 
+                                     @dragleave.prevent="isDragging = false" 
+                                     @drop.prevent="onDrop">
+                                    <div class="text-center mb-3">
+                                        <v-icon size="40" :color="isDragging ? 'primary' : 'grey'">mdi-cloud-upload-outline</v-icon>
+                                        <div class="text-caption mt-2">Glissez et déposez vos fichiers ici, ou cliquez ci-dessous</div>
+                                    </div>
+                                    <v-file-input v-model="form.fichiers"
+                                        label="Choisir plusieurs fichiers (PDF, Images, Word...)" variant="outlined"
+                                        prepend-icon="mdi-paperclip" show-size multiple counter
+                                        :error-messages="form.errors.fichiers"
+                                        accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
+                                        <template v-slot:selection="{ fileNames }">
+                                            <template v-for="fileName in fileNames" :key="fileName">
+                                                <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
+                                                }}</v-chip>
+                                            </template>
                                         </template>
-                                    </template>
-                                </v-file-input>
+                                    </v-file-input>
+                                </div>
                             </v-col>
 
                             <input v-if="folderMode" id="folderInput" type="file" webkitdirectory multiple
@@ -1042,6 +1093,65 @@ const getFileColor = (ext) => {
                     <v-btn icon="mdi-close" variant="text" @click="previewDialog = false"></v-btn>
                 </v-toolbar>
                 <iframe :src="currentFileUrl" width="100%" style="height: 85vh; border: none;"></iframe>
+            </v-card>
+        </v-dialog>
+
+        <!-- DIALOGUE DES 10 DERNIÈRES ARCHIVES -->
+        <v-dialog v-model="recentDialog" width="95%" max-width="1200px" scrollable>
+            <v-card class="rounded-xl overflow-hidden" style="max-height: 90vh;">
+                <v-toolbar color="secondary" flat>
+                    <v-icon start class="ml-4">mdi-history</v-icon>
+                    <v-toolbar-title class="font-weight-bold text-body-1">
+                        Les 10 dernières archives
+                    </v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="recentDialog = false"></v-btn>
+                </v-toolbar>
+                <v-card-text class="pa-0">
+                    <v-table hover density="comfortable">
+                        <thead>
+                            <tr class="bg-grey-lighten-4">
+                                <th class="text-overline font-weight-bold">Nom du document</th>
+                                <th class="text-overline font-weight-bold">Référence</th>
+                                <th class="text-overline font-weight-bold">Dossier</th>
+                                <th class="text-overline font-weight-bold">Date</th>
+                                <th class="text-overline font-weight-bold text-center">Statut</th>
+                                <th class="text-right text-overline font-weight-bold">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="file in props.stats.recent_archives" :key="file.id" @dblclick="previewFile(file)"
+                                class="cursor-pointer file-row">
+                                <td>
+                                    <div class="d-flex align-center">
+                                        <v-icon :color="getFileColor(file.type_document)" class="mr-3">
+                                            {{ getFileIcon(file.type_document) }}
+                                        </v-icon>
+                                        <span class="font-weight-medium text-body-2">{{ file.titre }}</span>
+                                    </div>
+                                </td>
+                                <td class="text-caption text-grey-darken-1">{{ file.reference }}</td>
+                                <td class="text-caption text-grey-darken-1">{{ file.chemin }}</td>
+                                <td class="text-caption text-grey-darken-1">{{ formatDate(file.date_document) }}</td>
+                                <td class="text-center">
+                                    <v-chip :color="getStatusInfo(file).color" size="x-small"
+                                        :prepend-icon="getStatusInfo(file).icon">
+                                        {{ getStatusInfo(file).label }}
+                                    </v-chip>
+                                </td>
+                                <td class="text-right">
+                                    <v-btn icon="mdi-eye-outline" size="x-small" variant="text"
+                                        color="blue-grey-darken-2" @click="previewFile(file)"></v-btn>
+                                    <v-btn icon="mdi-download-outline" size="x-small" variant="text" color="primary"
+                                        @click="downloadFile(file)"></v-btn>
+                                </td>
+                            </tr>
+                            <tr v-if="!props.stats.recent_archives || props.stats.recent_archives.length === 0">
+                                <td colspan="6" class="text-center py-8 text-grey">Aucune archive récente trouvée</td>
+                            </tr>
+                        </tbody>
+                    </v-table>
+                </v-card-text>
             </v-card>
         </v-dialog>
     </AuthenticatedLayout>
@@ -1123,5 +1233,18 @@ const getFileColor = (ext) => {
 
 .h-100 {
     height: 100%;
+}
+
+.dropzone-area {
+    border: 2px dashed #CFD8DC;
+    border-radius: 12px;
+    padding: 20px 15px 5px 15px;
+    transition: all 0.3s ease;
+    background-color: #FAFAFA;
+}
+
+.dropzone-area.is-dragging {
+    border-color: #1976D2;
+    background-color: #E3F2FD;
 }
 </style>

@@ -47,11 +47,23 @@ return [
             'report' => false,
         ],
 
-        // 🔥 DISQUE POUR LE STOCKAGE DES ARCHIVES (serveur distant 10.10.22.233) 🔥
+        /*
+        |--------------------------------------------------------------------------
+        | Disque pour les archives
+        |--------------------------------------------------------------------------
+        |
+        | Ce disque est utilisé pour stocker les fichiers d'archives.
+        | En local, il utilise le stockage public.
+        | En production, il peut être configuré via la variable d'environnement
+        | ARCHIVES_PATH pour pointer vers un chemin spécifique.
+        |
+        */
         'archives' => [
             'driver' => 'local',
-            'root'   => '/var/www/html/archives_remote',
-            'throw'  => false,
+            'root' => env('ARCHIVES_PATH', storage_path('app/public/archives')),
+            'url' => rtrim(env('APP_URL', 'http://localhost'), '/').'/storage/archives',
+            'visibility' => 'public',
+            'throw' => false,
             'report' => false,
         ],
 

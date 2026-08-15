@@ -11,6 +11,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 class StatsController extends Controller
 {
@@ -29,35 +30,40 @@ class StatsController extends Controller
         $isArchiviste = $user->isArchiviste();
 
         try {
-            // Totaux globaux
-            $totalArchives = Archive::count();
-            $totalDossiers = Dossier::count();
-            $totalAnnees = DossierAnnee::count();
-            $totalMois = DossierMois::count();
+            $globalStats = Cache::remember('stats_global', 300, function () {
+                $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
+                    ->groupBy('validation_status')
+                    ->pluck('total', 'validation_status');
 
-            // Archives par année (une requête)
-            $archivesParAnnee = Archive::selectRaw('YEAR(date_document) as annee, COUNT(*) as total')
-                ->whereNotNull('date_document')
-                ->groupBy('annee')
-                ->orderBy('annee', 'desc')
-                ->get();
+                return [
+                    'totalArchives' => Archive::count(),
+                    'totalDossiers' => Dossier::count(),
+                    'totalAnnees' => DossierAnnee::count(),
+                    'totalMois' => DossierMois::count(),
+                    'archivesParAnnee' => Archive::selectRaw('YEAR(date_document) as annee, COUNT(*) as total')
+                        ->whereNotNull('date_document')
+                        ->groupBy('annee')
+                        ->orderBy('annee', 'desc')
+                        ->get(),
+                    'archivesParType' => Archive::selectRaw('type_document, COUNT(*) as total')
+                        ->whereNotNull('type_document')
+                        ->groupBy('type_document')
+                        ->get(),
+                    'archivesParStatut' => [
+                        'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
+                        'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
+                        'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
+                    ]
+                ];
+            });
 
-            // Archives par type (une requête)
-            $archivesParType = Archive::selectRaw('type_document, COUNT(*) as total')
-                ->whereNotNull('type_document')
-                ->groupBy('type_document')
-                ->get();
-
-            // Statuts (une requête GROUP BY au lieu de 3 COUNT)
-            $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
-                ->groupBy('validation_status')
-                ->pluck('total', 'validation_status');
-
-            $archivesParStatut = [
-                'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
-                'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
-                'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
-            ];
+            $totalArchives = $globalStats['totalArchives'];
+            $totalDossiers = $globalStats['totalDossiers'];
+            $totalAnnees = $globalStats['totalAnnees'];
+            $totalMois = $globalStats['totalMois'];
+            $archivesParAnnee = $globalStats['archivesParAnnee'];
+            $archivesParType = $globalStats['archivesParType'];
+            $archivesParStatut = $globalStats['archivesParStatut'];
 
             $recentArchives = $this->getRecentArchives($user);
 
@@ -189,7 +195,7 @@ class StatsController extends Controller
             ->when($user->isArchiviste(), fn($q) => $q->where('created_by', $user->id))
             ->when($user->isDivision(), fn($q) =>
                 $q->where('validation_status', Archive::STATUS_VALIDATED))
-            ->latest()
+            ->latest('id')
             ->limit(10)
             ->get()
             ->map(fn($archive) => [

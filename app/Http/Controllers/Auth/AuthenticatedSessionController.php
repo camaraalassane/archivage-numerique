@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Models\ActivityLog;
 
 class AuthenticatedSessionController extends Controller
 {
@@ -33,6 +34,8 @@ class AuthenticatedSessionController extends Controller
 
         $request->session()->regenerate();
 
+        ActivityLog::log('user_login', "Connexion à l'application");
+
         return redirect()->intended(route('dashboard', absolute: false));
     }
 
@@ -41,6 +44,8 @@ class AuthenticatedSessionController extends Controller
      */
     public function destroy(Request $request): RedirectResponse
     {
+        ActivityLog::log('user_logout', "Déconnexion de l'application");
+        
         Auth::guard('web')->logout();
 
         $request->session()->invalidate();

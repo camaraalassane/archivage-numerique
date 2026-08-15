@@ -299,10 +299,10 @@ class ImportController extends Controller
             $fileName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file['name']);
             $fullStoragePath = $storagePath . '/' . $fileName;
 
-            Storage::disk('archives')->makeDirectory($storagePath);
+            Storage::disk('public')->makeDirectory($storagePath);
             $content = file_get_contents($fullPath);
             if ($content === false) throw new \Exception('Impossible de lire le fichier');
-            Storage::disk('archives')->put($fullStoragePath, $content);
+            Storage::disk('public')->put($fullStoragePath, $content);
 
             $reference = $this->generateUniqueReference($file['name']);
 
@@ -333,6 +333,82 @@ class ImportController extends Controller
             return ['file' => $file['name'], 'success' => false, 'is_duplicate' => false, 'error' => 'Erreur BDD: ' . $e->getMessage()];
         } catch (\Exception $e) {
             return ['file' => $file['name'], 'success' => false, 'is_duplicate' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    public function uploadMass(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user->isAdmin()) {
+            return response()->json(['error' => 'Accès non autorisé'], 403);
+        }
+
+        $request->validate([
+            'file' => 'required|file',
+            'folder' => 'required|string',
+            'dossier_id' => 'required|exists:dossiers,id',
+            'detected_date' => 'nullable|date',
+            'fallback_date' => 'required|date'
+        ]);
+
+        $file = $request->file('file');
+        $dossierId = $request->input('dossier_id');
+        $dateDocument = $request->input('detected_date') ?: $request->input('fallback_date');
+        $originalName = $file->getClientOriginalName();
+        $extension = strtolower($file->getClientOriginalExtension());
+        $mimeType = $file->getMimeType();
+        $size = $file->getSize();
+
+        $dossier = Dossier::with(['mois.annee'])->find($dossierId);
+        
+        if ($dossier->mois->annee->cloturee) {
+            return response()->json(['error' => "Année clôturée"], 400);
+        }
+
+        if ($this->isFileDuplicate('', $originalName)) {
+            return response()->json(['error' => 'Doublon', 'is_duplicate' => true], 400);
+        }
+
+        try {
+            $storagePath = 'archives/' . $dossier->mois->annee->annee . '/' . $dossier->mois->mois . '/' . $dossier->nom;
+            $fileName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $originalName);
+            
+            $path = $file->storeAs($storagePath, $fileName, 'public');
+
+            $reference = $this->generateUniqueReference($originalName);
+
+            $archive = Archive::create([
+                'titre' => pathinfo($originalName, PATHINFO_FILENAME),
+                'reference' => $reference,
+                'dossier_id' => $dossier->id,
+                'type_document' => $extension,
+                'fichier_path' => $path,
+                'fichier_nom_original' => $originalName,
+                'fichier_taille' => $size,
+                'mime_type' => $mimeType,
+                'date_document' => $dateDocument,
+                'created_by' => $user->id,
+                'validation_status' => Archive::STATUS_PENDING,
+                'chemin' => $dossier->chemin ?? null,
+            ]);
+            
+            \App\Models\ActivityLog::log('archive_created', "A importé le document {$archive->reference} : {$archive->titre} via le scan de masse");
+
+            return response()->json([
+                'success' => true,
+                'file' => $originalName,
+                'reference' => $reference,
+                'date_document' => $dateDocument,
+                'dossier' => $dossier->nom,
+            ]);
+
+        } catch (\Illuminate\Database\QueryException $e) {
+            if ($e->errorInfo[1] == 1062) {
+                return response()->json(['error' => 'Doublon (référence existante)', 'is_duplicate' => true], 400);
+            }
+            return response()->json(['error' => 'Erreur BDD: ' . $e->getMessage()], 500);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 }

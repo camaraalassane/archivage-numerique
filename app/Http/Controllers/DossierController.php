@@ -3,6 +3,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\Archive;
 use App\Models\Dossier;
 use App\Models\DossierAnnee;
@@ -23,7 +24,7 @@ class DossierController extends Controller
         }
 
         return Inertia::render('Dossiers/Index', [
-            'dossiers' => Dossier::with(['mois.annee'])->latest()->get(),
+            'dossiers' => Dossier::with(['mois.annee'])->latest('id')->get(),
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
             'mois' => DossierMois::with('annee')->where('active', true)->get(['id', 'annee_id', 'mois', 'nom_mois']),
             'permissions' => [
@@ -119,7 +120,9 @@ class DossierController extends Controller
                 return redirect()->back()->with('error', 'Impossible : cette année est clôturée.');
             }
 
-            Dossier::create($validated);
+            $dossier = Dossier::create($validated);
+
+            ActivityLog::log('dossier_created', "A créé le dossier {$dossier->nom} ({$dossier->code})");
 
             return redirect()->back()->with('success', 'Dossier créé avec succès !');
         } catch (\Exception $e) {
@@ -211,6 +214,10 @@ class DossierController extends Controller
             if ($existingCount > 0) $message .= '. ' . $existingCount . ' dossier(s) existant(s) ignoré(s)';
             if (!empty($errors)) $message .= '. Erreurs: ' . implode(', ', $errors);
 
+            if ($createdCount > 0) {
+                ActivityLog::log('dossier_batch_created', "A importé en masse {$createdCount} dossiers");
+            }
+
             return redirect()->back()->with(
                 $createdCount > 0 ? 'success' : 'warning',
                 $message
@@ -249,6 +256,8 @@ class DossierController extends Controller
 
             $dossier->update($validated);
 
+            ActivityLog::log('dossier_updated', "A modifié le dossier {$dossier->nom} ({$dossier->code})");
+
             return redirect()->back()->with('success', 'Dossier mis à jour avec succès !');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur update:', ['message' => $e->getMessage()]);
@@ -269,7 +278,12 @@ class DossierController extends Controller
                 return redirect()->back()->with('error', 'Impossible : ce dossier contient des documents.');
             }
 
+            $nom = $dossier->nom;
+            $code = $dossier->code;
             $dossier->delete();
+            
+            ActivityLog::log('dossier_deleted', "A supprimé le dossier {$nom} ({$code})");
+            
             return redirect()->back()->with('success', 'Dossier supprimé avec succès.');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur destroy:', ['message' => $e->getMessage()]);
@@ -298,8 +312,11 @@ class DossierController extends Controller
 
             $dossier->active = !$dossier->active;
             $dossier->save();
+            
+            $statut = $dossier->active ? 'activé' : 'désactivé';
+            ActivityLog::log('dossier_updated', "A {$statut} le dossier {$dossier->nom}");
 
-            return redirect()->back()->with('success', 'Statut mis à jour avec succès');
+            return redirect()->back()->with('success', 'Statut du dossier mis à jour.');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur toggle:', ['message' => $e->getMessage()]);
             return redirect()->back()->with('error', 'Erreur: ' . $e->getMessage());

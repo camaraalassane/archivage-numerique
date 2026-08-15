@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class DashboardController extends Controller
 {
@@ -24,47 +25,59 @@ class DashboardController extends Controller
         $isAdmin = $user->isAdmin();
 
         // === ARBORESCENCE SANS ARCHIVES (rapide) ===
-        $treeData = DossierAnnee::with([
-            'mois' => function ($query) {
-                $query->orderBy('mois')->where('active', true);
-            },
-            'mois.dossiers' => function ($query) {
-                $query->orderBy('ordre')
-                    ->where('active', true)
-                    ->withCount('archives'); // juste le compteur
-            },
-        ])
-            ->where('active', true)
-            ->where('cloturee', false)
-            ->orderBy('annee', 'desc')
-            ->get();
+        $treeData = Cache::remember('dashboard_tree_data', 300, function () {
+            return DossierAnnee::with([
+                'mois' => function ($query) {
+                    $query->orderBy('mois')->where('active', true);
+                },
+                'mois.dossiers' => function ($query) {
+                    $query->orderBy('ordre')
+                        ->where('active', true)
+                        ->withCount('archives'); // juste le compteur
+                },
+            ])
+                ->where('active', true)
+                ->where('cloturee', false)
+                ->orderBy('annee', 'desc')
+                ->get();
+        });
 
         // === STATISTIQUES ===
-        $baseQuery = Archive::query();
-        if ($isArchiviste) {
-            $baseQuery->where('created_by', $user->id);
-        } elseif ($isDivision) {
-            $baseQuery->where('validation_status', Archive::STATUS_VALIDATED);
-        }
+        $cacheKey = "dashboard_stats_user_{$user->id}";
 
-        $totalArchives = $baseQuery->count();
+        $stats = Cache::remember($cacheKey, 300, function () use ($user, $isArchiviste, $isDivision) {
+            $baseQuery = Archive::query();
+            if ($isArchiviste) {
+                $baseQuery->where('created_by', $user->id);
+            } elseif ($isDivision) {
+                $baseQuery->where('validation_status', Archive::STATUS_VALIDATED);
+            }
 
-        $archivesParType = Archive::selectRaw('type_document, count(*) as total')
-            ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
-            ->when($isDivision, fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
-            ->groupBy('type_document')
-            ->pluck('total', 'type_document');
+            $totalArchives = $baseQuery->count();
 
-        $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
-            ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
-            ->groupBy('validation_status')
-            ->pluck('total', 'validation_status');
+            $archivesParType = Archive::selectRaw('type_document, count(*) as total')
+                ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
+                ->when($isDivision, fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
+                ->groupBy('type_document')
+                ->pluck('total', 'type_document');
 
-        $archivesParStatut = [
-            'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
-            'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
-            'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
-        ];
+            $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
+                ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
+                ->groupBy('validation_status')
+                ->pluck('total', 'validation_status');
+
+            $archivesParStatut = [
+                'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
+                'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
+                'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
+            ];
+
+            return compact('totalArchives', 'archivesParType', 'archivesParStatut');
+        });
+
+        $totalArchives = $stats['totalArchives'];
+        $archivesParType = $stats['archivesParType'];
+        $archivesParStatut = $stats['archivesParStatut'];
 
         // Archives récentes (limitées)
         $recentArchives = Archive::with([
@@ -75,7 +88,7 @@ class DashboardController extends Controller
         ])
             ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
             ->when($isDivision, fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
-            ->latest()
+            ->latest('id')
             ->limit(10)
             ->get()
             ->map(fn($archive) => [

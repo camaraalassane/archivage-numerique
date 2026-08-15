@@ -75,6 +75,30 @@ const previewFile = (archive) => {
     previewDialog.value = true;
 };
 
+// DRAG & DROP
+const isDragging = ref(false);
+const onDrop = (event) => {
+    isDragging.value = false;
+    const files = event.dataTransfer.files;
+    if (files && files.length > 0) {
+        if (!multipleMode.value && files.length > 1) {
+            showNotify('Mode fichier unique : un seul fichier a été conservé.', 'warning');
+            form.fichier = files[0];
+            return;
+        }
+        
+        if (multipleMode.value) {
+            if (folderMode.value) {
+                onFolderSelect({ target: { files: files } });
+            } else {
+                form.fichiers = Array.from(files);
+            }
+        } else {
+            form.fichier = files[0];
+        }
+    }
+};
+
 const dialog = ref(false);
 const isEditing = ref(false);
 const editingId = ref(null);
@@ -790,12 +814,12 @@ const formatSize = (bytes) => {
                                     <v-icon left>{{ folderMode ? 'mdi-folder-open' : 'mdi-folder' }}</v-icon>
                                     {{ folderMode ? 'Dossier sélectionné' : 'Sélectionner un dossier' }}
                                 </v-btn>
-                                <div class="text-caption text-grey mt-1">
-                                    <span v-if="folderMode">
-                                        {{ folderFiles.length }} fichier(s) trouvé(s) dans le dossier
-                                    </span>
-                                    <span v-else>
-                                        Sélectionnez un dossier pour importer tous les fichiers
+                                <div class="text-caption mt-2">
+                                    <v-alert v-if="folderMode && folderFiles.length > 0" type="info" variant="tonal" density="compact">
+                                        Prêt à importer <strong>{{ folderFiles.length }} fichier(s)</strong>. Veuillez valider en cliquant sur "Archiver".
+                                    </v-alert>
+                                    <span v-else-if="!folderMode" class="text-grey">
+                                        Sélectionnez le dossier contenant les fichiers
                                     </span>
                                 </div>
                             </div>
@@ -896,31 +920,49 @@ const formatSize = (bytes) => {
                             </v-col>
 
                             <v-col cols="12" v-if="!isEditing && !multipleMode">
-                                <v-file-input v-model="form.fichier" label="Choisir le fichier (PDF, Images, Word...)"
-                                    variant="outlined" prepend-icon="mdi-paperclip" show-size
-                                    :error-messages="form.errors.fichier"
-                                    accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
-                                    <template v-slot:selection="{ fileNames }">
-                                        <template v-for="fileName in fileNames" :key="fileName">
-                                            <v-chip size="small" color="primary" class="mr-2">{{ fileName }}</v-chip>
+                                <div class="dropzone-area" :class="{ 'is-dragging': isDragging }" 
+                                     @dragover.prevent="isDragging = true" 
+                                     @dragleave.prevent="isDragging = false" 
+                                     @drop.prevent="onDrop">
+                                    <div class="text-center mb-3">
+                                        <v-icon size="40" :color="isDragging ? 'primary' : 'grey'">mdi-cloud-upload-outline</v-icon>
+                                        <div class="text-caption mt-2">Glissez et déposez votre fichier ici, ou cliquez ci-dessous</div>
+                                    </div>
+                                    <v-file-input v-model="form.fichier" label="Choisir le fichier (PDF, Images, Word...)"
+                                        variant="outlined" prepend-icon="mdi-paperclip" show-size
+                                        :error-messages="form.errors.fichier"
+                                        accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
+                                        <template v-slot:selection="{ fileNames }">
+                                            <template v-for="fileName in fileNames" :key="fileName">
+                                                <v-chip size="small" color="primary" class="mr-2">{{ fileName }}</v-chip>
+                                            </template>
                                         </template>
-                                    </template>
-                                </v-file-input>
+                                    </v-file-input>
+                                </div>
                             </v-col>
 
                             <v-col cols="12" v-if="!isEditing && multipleMode && !folderMode">
-                                <v-file-input v-model="form.fichiers"
-                                    label="Choisir plusieurs fichiers (PDF, Images, Word...)" variant="outlined"
-                                    prepend-icon="mdi-paperclip" show-size multiple counter
-                                    :error-messages="form.errors.fichiers"
-                                    accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
-                                    <template v-slot:selection="{ fileNames }">
-                                        <template v-for="fileName in fileNames" :key="fileName">
-                                            <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
-                                            }}</v-chip>
+                                <div class="dropzone-area" :class="{ 'is-dragging': isDragging }" 
+                                     @dragover.prevent="isDragging = true" 
+                                     @dragleave.prevent="isDragging = false" 
+                                     @drop.prevent="onDrop">
+                                    <div class="text-center mb-3">
+                                        <v-icon size="40" :color="isDragging ? 'primary' : 'grey'">mdi-cloud-upload-outline</v-icon>
+                                        <div class="text-caption mt-2">Glissez et déposez vos fichiers ici, ou cliquez ci-dessous</div>
+                                    </div>
+                                    <v-file-input v-model="form.fichiers"
+                                        label="Choisir plusieurs fichiers (PDF, Images, Word...)" variant="outlined"
+                                        prepend-icon="mdi-paperclip" show-size multiple counter
+                                        :error-messages="form.errors.fichiers"
+                                        accept=".pdf,.jpg,.jpeg,.png,.docx,.doc,.xls,.xlsx" required>
+                                        <template v-slot:selection="{ fileNames }">
+                                            <template v-for="fileName in fileNames" :key="fileName">
+                                                <v-chip size="small" color="primary" class="mr-2 mb-1">{{ fileName
+                                                }}</v-chip>
+                                            </template>
                                         </template>
-                                    </template>
-                                </v-file-input>
+                                    </v-file-input>
+                                </div>
                             </v-col>
 
                             <input v-if="folderMode" id="folderInput" type="file" webkitdirectory multiple
@@ -990,6 +1032,19 @@ const formatSize = (bytes) => {
 .v-dialog-enter-from,
 .v-dialog-leave-to {
     opacity: 0;
+}
+
+.dropzone-area {
+    border: 2px dashed #CFD8DC;
+    border-radius: 12px;
+    padding: 20px 15px 5px 15px;
+    transition: all 0.3s ease;
+    background-color: #FAFAFA;
+}
+
+.dropzone-area.is-dragging {
+    border-color: #1976D2;
+    background-color: #E3F2FD;
 }
 
 .border-bottom {

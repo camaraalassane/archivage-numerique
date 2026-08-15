@@ -8,6 +8,7 @@ use App\Models\Dossier;
 use App\Models\DossierAnnee;
 use App\Models\DossierMois;
 use App\Models\User;
+use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
@@ -44,7 +45,7 @@ class ArchiveController extends Controller
 
         return Inertia::render('Archives/Index', [
             'filters' => $request->all(['search', 'dossier_id', 'type', 'date_debut', 'date_fin', 'validation_status']),
-            'archives' => $query->latest()->paginate(50)->withQueryString(),
+            'archives' => $query->latest('id')->paginate(50)->withQueryString(),
             'dossiers' => Dossier::with(['mois.annee'])->orderBy('nom')->get(['id', 'nom', 'mois_id', 'couleur']),
             'type_documents' => Archive::select('type_document')->distinct()->pluck('type_document'),
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
@@ -184,6 +185,8 @@ class ArchiveController extends Controller
             'validation_comment' => $request->comment,
         ]);
 
+        ActivityLog::log('archive_validated', "A validé le document {$archive->reference} : {$archive->titre} (Statut: {$request->status})");
+
         $statusLabel = $request->status === 'validated' ? 'validée' : 'rejetée';
         return redirect()->back()->with('success', "Archive {$statusLabel} avec succès.");
     }
@@ -283,6 +286,8 @@ class ArchiveController extends Controller
                 ]
             ]);
 
+            ActivityLog::log('archive_created', "A archivé le document {$archive->reference} : {$archive->titre}");
+
             return redirect()->back()->with('success', 'Document archivé avec succès. En attente de validation.');
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -301,6 +306,14 @@ class ArchiveController extends Controller
 
             if (!$user->isAdmin() && !$user->isGestionnaire() && !$user->isArchiviste()) {
                 abort(403, 'Vous n\'avez pas les droits pour créer des archives.');
+            }
+
+            if (empty($request->all()) && $request->server('CONTENT_LENGTH') > 0) {
+                return redirect()->back()->with('error', 'L\'envoi a échoué car la taille totale dépasse la limite autorisée par votre serveur (post_max_size).');
+            }
+
+            if (!$request->hasFile('fichiers') || count($request->file('fichiers')) === 0) {
+                return redirect()->back()->with('error', 'Aucun fichier reçu. Si vous avez sélectionné beaucoup de fichiers, vérifiez la limite max_file_uploads du serveur.');
             }
 
             $validated = $request->validate([
@@ -372,7 +385,7 @@ class ArchiveController extends Controller
                     $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
                     $path = $file->store($chemin, 'archives');
 
-                    Archive::create([
+                    $archive = Archive::create([
                         'titre' => pathinfo($originalName, PATHINFO_FILENAME),
                         'reference' => $reference,
                         'description' => $request->description,
@@ -391,6 +404,8 @@ class ArchiveController extends Controller
                             'navigateur' => $request->header('User-Agent')
                         ]
                     ]);
+                    
+                    ActivityLog::log('archive_created', "A archivé le document {$archive->reference} : {$archive->titre}");
 
                     $imported++;
                 } catch (\Exception $e) {
@@ -440,7 +455,7 @@ class ArchiveController extends Controller
                 abort(403, 'Vous n\'avez pas les droits pour modifier des archives.');
             }
 
-            $request->validate([
+            $validated = $request->validate([
                 'titre' => 'required|string|max:255',
                 'reference' => 'required|string|unique:archives,reference,' . $archive->id,
                 'dossier_id' => 'required|exists:dossiers,id',
@@ -454,9 +469,9 @@ class ArchiveController extends Controller
                 return redirect()->back()->with('error', 'Impossible : cette année est clôturée.');
             }
 
-            $archive->update($request->only([
-                'titre', 'reference', 'dossier_id', 'date_document', 'description', 'mots_cles', 'version'
-            ]));
+            $archive->update($validated);
+            
+            ActivityLog::log('archive_updated', "A modifié le document {$archive->reference} : {$archive->titre}");
 
             return redirect()->back()->with('success', 'Document mis à jour avec succès');
 
@@ -468,10 +483,10 @@ class ArchiveController extends Controller
 
     public function download(Archive $archive): StreamedResponse
     {
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
+        if (!Storage::disk('public')->exists($archive->fichier_path)) {
             abort(404, 'Le fichier physique est introuvable.');
         }
-        return Storage::disk('archives')->download(
+        return Storage::disk('public')->download(
             $archive->fichier_path,
             $archive->fichier_nom_original
         );
@@ -479,10 +494,10 @@ class ArchiveController extends Controller
 
     public function viewFile(Archive $archive)
     {
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
+        if (!Storage::disk('public')->exists($archive->fichier_path)) {
             abort(404);
         }
-        return response()->file(Storage::disk('archives')->path($archive->fichier_path));
+        return response()->file(Storage::disk('public')->path($archive->fichier_path));
     }
 
     public function destroy(Archive $archive)
@@ -494,11 +509,17 @@ class ArchiveController extends Controller
                 abort(403, 'Vous n\'avez pas les droits pour supprimer des archives.');
             }
 
-            if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
-                Storage::disk('archives')->delete($archive->fichier_path);
+            if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
+                Storage::disk('public')->delete($archive->fichier_path);
             }
+            
+            $reference = $archive->reference;
+            $titre = $archive->titre;
 
             $archive->delete();
+            
+            ActivityLog::log('archive_deleted', "A supprimé le document {$reference} : {$titre}");
+
             return redirect()->back()->with('success', 'Archive supprimée avec succès.');
 
         } catch (\Exception $e) {
@@ -534,7 +555,7 @@ class ArchiveController extends Controller
             ->when($request->date_debut, fn($q, $dd) => $q->whereDate('date_document', '>=', $dd))
             ->when($request->date_fin, fn($q, $df) => $q->whereDate('date_document', '<=', $df));
 
-            $archives = $query->latest()->get();
+            $archives = $query->latest('id')->get();
 
             $fileName = 'export_archives_' . now()->format('d_m_Y') . '.csv';
 

@@ -4,6 +4,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
@@ -33,6 +34,32 @@ class UserController extends Controller
         ]);
     }
 
+    public function store(Request $request)
+    {
+        // Vérifier que l'utilisateur connecté est Admin
+        if (!Auth::user()->canManageUsers()) {
+            abort(403, 'Vous n\'avez pas les droits pour créer des utilisateurs.');
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'role' => 'required|in:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN . ',' . User::ROLE_DIVISION,
+            'password' => 'required|string|min:8',
+        ]);
+
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'role' => $request->role,
+            'password' => bcrypt($request->password),
+        ]);
+
+        ActivityLog::log('user_created', "A créé l'utilisateur {$user->name} ({$user->email})");
+
+        return redirect()->back()->with('success', 'Utilisateur créé avec succès.');
+    }
+
     public function update(Request $request, User $user)
     {
         // Vérifier que l'utilisateur connecté est Admin
@@ -48,6 +75,8 @@ class UserController extends Controller
 
         $user->update($request->only(['name', 'email', 'role']));
 
+        ActivityLog::log('user_updated', "A modifié l'utilisateur {$user->name} ({$user->email})");
+
         return redirect()->back()->with('success', 'Utilisateur mis à jour avec succès.');
     }
 
@@ -62,7 +91,10 @@ class UserController extends Controller
             return redirect()->back()->with('error', 'Vous ne pouvez pas supprimer votre propre compte.');
         }
 
+        $name = $user->name;
         $user->delete();
+        ActivityLog::log('user_deleted', "A supprimé l'utilisateur {$name}");
+
         return redirect()->back()->with('success', 'Utilisateur supprimé avec succès.');
     }
 }

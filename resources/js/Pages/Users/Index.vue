@@ -11,6 +11,7 @@ const props = defineProps({
 
 const editDialog = ref(false);
 const deleteDialog = ref(false);
+const createDialog = ref(false);
 const editingUser = ref(null);
 const userToDelete = ref(null);
 
@@ -19,6 +20,22 @@ const form = useForm({
     email: '',
     role: 1,
 });
+
+const createForm = useForm({
+    name: '',
+    email: '',
+    role: 1,
+    password: '',
+});
+
+const createUser = () => {
+    createForm.post(route('users.store'), {
+        onSuccess: () => {
+            createDialog.value = false;
+            createForm.reset();
+        }
+    });
+};
 
 const openEditDialog = (user) => {
     editingUser.value = user;
@@ -77,6 +94,9 @@ const getRoleColor = (role) => {
                     </div>
                 </div>
                 <v-spacer></v-spacer>
+                <v-btn color="primary" prepend-icon="mdi-account-plus" @click="createDialog = true">
+                    Créer un utilisateur
+                </v-btn>
             </v-toolbar>
 
             <v-table hover>
@@ -107,6 +127,49 @@ const getRoleColor = (role) => {
                 </tbody>
             </v-table>
         </v-card>
+
+        <!-- Dialog de création -->
+        <v-dialog v-model="createDialog" max-width="500px" persistent>
+            <v-card>
+                <v-toolbar color="primary">
+                    <v-toolbar-title>Créer un utilisateur</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" @click="createDialog = false"></v-btn>
+                </v-toolbar>
+                <v-card-text class="pa-6">
+                    <v-form @submit.prevent="createUser">
+                        <v-text-field v-model="createForm.name" label="Nom" variant="outlined"
+                            :error-messages="createForm.errors.name" required></v-text-field>
+
+                        <v-text-field v-model="createForm.email" label="Email" type="email" variant="outlined"
+                            :error-messages="createForm.errors.email" required></v-text-field>
+
+                        <v-text-field v-model="createForm.password" label="Mot de passe" type="password" variant="outlined"
+                            :error-messages="createForm.errors.password" required></v-text-field>
+
+                        <v-select v-model="createForm.role" :items="roles" item-title="name" item-value="id" label="Rôle"
+                            variant="outlined" :error-messages="createForm.errors.role" required>
+                            <template v-slot:item="{ item, props: itemProps }">
+                                <v-list-item v-bind="itemProps">
+                                    <div class="d-flex align-center">
+                                        <v-chip :color="item.value === 2 ? 'success' : 'primary'" size="small" class="mr-2">
+                                            {{ item.title }}
+                                        </v-chip>
+                                    </div>
+                                </v-list-item>
+                            </template>
+                        </v-select>
+
+                        <div class="d-flex justify-end mt-4">
+                            <v-btn variant="text" @click="createDialog = false">Annuler</v-btn>
+                            <v-btn color="primary" type="submit" :loading="createForm.processing" class="ml-2">
+                                Créer
+                            </v-btn>
+                        </div>
+                    </v-form>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
 
         <!-- Dialog d'édition -->
         <v-dialog v-model="editDialog" max-width="500px" persistent>

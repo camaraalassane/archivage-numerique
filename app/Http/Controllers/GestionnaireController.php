@@ -162,8 +162,8 @@ class GestionnaireController extends Controller
 
         $count = 0;
         foreach ($archives as $archive) {
-            if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
-                Storage::disk('archives')->delete($archive->fichier_path);
+            if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
+                Storage::disk('public')->delete($archive->fichier_path);
             }
             $archive->delete();
             $count++;
@@ -180,8 +180,8 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour supprimer cette archive.');
         }
 
-        if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
-            Storage::disk('archives')->delete($archive->fichier_path);
+        if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
+            Storage::disk('public')->delete($archive->fichier_path);
         }
 
         $archive->delete();
@@ -197,11 +197,11 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour visualiser ce document.');
         }
 
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
+        if (!Storage::disk('public')->exists($archive->fichier_path)) {
             abort(404);
         }
 
-        return response()->file(Storage::disk('archives')->path($archive->fichier_path));
+        return response()->file(Storage::disk('public')->path($archive->fichier_path));
     }
 
     public function download(Archive $archive): StreamedResponse
@@ -212,11 +212,11 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour télécharger ce document.');
         }
 
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
+        if (!Storage::disk('public')->exists($archive->fichier_path)) {
             abort(404, 'Le fichier physique est introuvable.');
         }
 
-        return Storage::disk('archives')->download(
+        return Storage::disk('public')->download(
             $archive->fichier_path,
             $archive->fichier_nom_original
         );

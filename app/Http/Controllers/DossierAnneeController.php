@@ -5,10 +5,10 @@ namespace App\Http\Controllers;
 
 use App\Models\DossierAnnee;
 use App\Models\DossierMois;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use App\Models\ActivityLog;
 
 class DossierAnneeController extends Controller
 {
@@ -75,6 +75,8 @@ class DossierAnneeController extends Controller
         $annee = DossierAnnee::create($validated);
         $this->createMoisForAnnee($annee);
 
+        ActivityLog::log('dossier_annee_created', "A créé l'année {$annee->annee}");
+
         return redirect()->back()->with('success', 'Année ' . $annee->annee . ' créée avec succès avec ses 12 mois !');
     }
 
@@ -106,6 +108,8 @@ class DossierAnneeController extends Controller
 
         $annee->update($validated);
 
+        ActivityLog::log('dossier_annee_updated', "A modifié l'année {$annee->annee}");
+
         return redirect()->back()->with('success', 'Année ' . $annee->annee . ' mise à jour !');
     }
 
@@ -125,7 +129,11 @@ class DossierAnneeController extends Controller
             return redirect()->back()->with('error', 'Impossible : cette année contient des mois.');
         }
 
+        $anneeValue = $annee->annee;
         $annee->delete();
+
+        ActivityLog::log('dossier_annee_deleted', "A supprimé l'année {$anneeValue}");
+
         return redirect()->back()->with('success', 'Année supprimée avec succès.');
     }
 
@@ -143,6 +151,8 @@ class DossierAnneeController extends Controller
 
         $annee->mois()->update(['active' => false]);
         $annee->update(['cloturee' => true]);
+
+        ActivityLog::log('dossier_annee_updated', "A clôturé l'année {$annee->annee}");
 
         return redirect()->back()->with('success', 'Année ' . $annee->annee . ' clôturée avec succès !');
     }
@@ -162,6 +172,8 @@ class DossierAnneeController extends Controller
         $annee->mois()->update(['active' => true]);
         $annee->update(['cloturee' => false]);
 
+        ActivityLog::log('dossier_annee_updated', "A réouvert l'année {$annee->annee}");
+
         return redirect()->back()->with('success', 'Année ' . $annee->annee . ' réouverte avec succès !');
     }
 
@@ -176,6 +188,9 @@ class DossierAnneeController extends Controller
         $annee->update([
             'active' => !$annee->active
         ]);
+
+        $statut = $annee->active ? 'activée' : 'désactivée';
+        ActivityLog::log('dossier_annee_updated', "A {$statut} l'année {$annee->annee}");
 
         return redirect()->back()->with('success', 'Visibilité mise à jour');
     }

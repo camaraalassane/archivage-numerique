@@ -12,6 +12,7 @@ use App\Http\Controllers\ImportController;
 use App\Http\Controllers\StatsController;
 use App\Http\Controllers\ArchivisteController;
 use App\Http\Controllers\GestionnaireController;
+use App\Http\Controllers\ActivityLogController;
 use App\Models\User;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -91,7 +92,8 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_GESTIONNAIRE . ',' .
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ADMIN])
     ->group(function () {
         // --- GESTION DES UTILISATEURS ---
-        Route::resource('users', UserController::class)->except(['show', 'create', 'store']);
+        Route::resource('users', UserController::class)->except(['show', 'create']);
+        Route::get('/activity-logs', [ActivityLogController::class, 'index'])->name('activity-logs.index');
 
         // --- GESTION DES ANNÉES ---
         Route::resource('annees', DossierAnneeController::class)->except(['show']);
@@ -108,6 +110,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ADMIN])
         Route::get('/import', [ImportController::class, 'index'])->name('import.index');
         Route::post('/import/scan', [ImportController::class, 'scanDirectory'])->name('import.scan');
         Route::post('/import/process', [ImportController::class, 'importFiles'])->name('import.process');
+        Route::post('/import/upload-mass', [ImportController::class, 'uploadMass'])->name('import.upload-mass');
 });
 
 // ============================================

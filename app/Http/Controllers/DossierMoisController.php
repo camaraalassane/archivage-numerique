@@ -5,10 +5,10 @@ namespace App\Http\Controllers;
 
 use App\Models\DossierMois;
 use App\Models\DossierAnnee;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use App\Models\ActivityLog;
 
 class DossierMoisController extends Controller
 {
@@ -22,7 +22,7 @@ class DossierMoisController extends Controller
         }
 
         return Inertia::render('Mois/Index', [
-            'mois' => DossierMois::with('annee')->latest()->get(),
+            'mois' => DossierMois::with('annee')->latest('id')->get(),
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
             'permissions' => [
                 'can_manage_months' => $user->canManageMonths(),
@@ -56,6 +56,8 @@ class DossierMoisController extends Controller
             }
 
             DossierMois::create($validated);
+
+            ActivityLog::log('dossier_mois_created', "A créé le mois {$validated['nom_mois']} ({$validated['code']})");
 
             return redirect()->back()->with('success', 'Mois créé avec succès !');
         } catch (\Exception $e) {
@@ -92,6 +94,8 @@ class DossierMoisController extends Controller
 
             $dossierMois->update($validated);
 
+            ActivityLog::log('dossier_mois_updated', "A modifié le mois {$dossierMois->nom_mois} ({$dossierMois->code})");
+
             return redirect()->back()->with('success', 'Mois mis à jour !');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur update mois:', [
@@ -115,7 +119,11 @@ class DossierMoisController extends Controller
                 return redirect()->back()->with('error', 'Impossible : ce mois contient des dossiers.');
             }
 
+            $nom = $dossierMois->nom_mois;
             $dossierMois->delete();
+            
+            ActivityLog::log('dossier_mois_deleted', "A supprimé le mois {$nom}");
+            
             return redirect()->back()->with('success', 'Mois supprimé avec succès.');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur destroy mois:', [
@@ -148,7 +156,10 @@ class DossierMoisController extends Controller
             $dossierMois->active = !$dossierMois->active;
             $dossierMois->save();
 
-            return redirect()->back()->with('success', 'Statut mis à jour');
+            $statut = $dossierMois->active ? 'activé' : 'désactivé';
+            ActivityLog::log('dossier_mois_updated', "A {$statut} le mois {$dossierMois->nom_mois}");
+
+            return redirect()->back()->with('success', 'Statut mis à jour avec succès');
         } catch (\Exception $e) {
             \Log::error('❌ Erreur toggle mois:', [
                 'message' => $e->getMessage(),

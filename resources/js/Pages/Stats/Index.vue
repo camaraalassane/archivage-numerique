@@ -20,6 +20,35 @@ const movingArchive = ref(null);
 const availableDossiers = ref([]);
 const isLoadingDossiers = ref(false);
 
+// Système de notification (Snackbar)
+const snackbar = ref({ show: false, text: '', color: 'success', icon: 'mdi-check-circle' });
+const showNotify = (text, color = 'success') => {
+    snackbar.value = {
+        show: true,
+        text,
+        color,
+        icon: color === 'success' ? 'mdi-check-circle' : 'mdi-alert-circle'
+    };
+};
+
+// Dialogue de confirmation générique
+const confirmDialog = ref(false);
+const confirmTitle = ref('');
+const confirmMessage = ref('');
+const confirmCallback = ref(null);
+
+const showConfirm = (message, callback, title = 'Confirmation') => {
+    confirmMessage.value = message;
+    confirmTitle.value = title;
+    confirmCallback.value = callback;
+    confirmDialog.value = true;
+};
+
+const onConfirm = () => {
+    confirmDialog.value = false;
+    if (confirmCallback.value) confirmCallback.value();
+};
+
 // Formulaire d'édition
 const editForm = useForm({
     titre: '',
@@ -109,7 +138,7 @@ const previewFile = (archive) => {
 // Édition
 const openEditDialog = (archive) => {
     if (!canModify.value) {
-        alert('Vous n\'avez pas les droits pour modifier ce document.');
+        showNotify('Vous n\'avez pas les droits pour modifier ce document.', 'error');
         return;
     }
     editingArchive.value = archive;
@@ -130,10 +159,11 @@ const updateArchive = () => {
             editingArchive.value = null;
             editForm.reset();
             router.reload({ only: ['stats'] });
+            showNotify('Document mis à jour avec succès', 'success');
         },
         onError: (errors) => {
             console.error('Erreur lors de la mise à jour:', errors);
-            alert('Erreur lors de la mise à jour du document.');
+            showNotify('Erreur lors de la mise à jour du document.', 'error');
         }
     });
 };
@@ -141,7 +171,7 @@ const updateArchive = () => {
 // Déplacement
 const openMoveDialog = async (archive) => {
     if (!canModify.value) {
-        alert('Vous n\'avez pas les droits pour déplacer ce document.');
+        showNotify('Vous n\'avez pas les droits pour déplacer ce document.', 'error');
         return;
     }
     movingArchive.value = archive;
@@ -156,7 +186,7 @@ const openMoveDialog = async (archive) => {
         availableDossiers.value = availableDossiers.value.filter(d => d.id !== archive.dossier_id);
     } catch (error) {
         console.error('Erreur lors du chargement des dossiers:', error);
-        alert('Impossible de charger la liste des dossiers.');
+        showNotify('Impossible de charger la liste des dossiers.', 'error');
     } finally {
         isLoadingDossiers.value = false;
     }
@@ -164,7 +194,7 @@ const openMoveDialog = async (archive) => {
 
 const moveArchive = () => {
     if (!moveForm.dossier_id) {
-        alert('Veuillez sélectionner un dossier de destination.');
+        showNotify('Veuillez sélectionner un dossier de destination.', 'warning');
         return;
     }
 
@@ -184,10 +214,11 @@ const moveArchive = () => {
             moveForm.reset();
             availableDossiers.value = [];
             router.reload({ only: ['stats'] });
+            showNotify('Document déplacé avec succès', 'success');
         },
         onError: (errors) => {
             console.error('Erreur lors du déplacement:', errors);
-            alert('Erreur lors du déplacement du document.');
+            showNotify('Erreur lors du déplacement du document.', 'error');
         }
     });
 };
@@ -195,44 +226,46 @@ const moveArchive = () => {
 // Validation
 const validateArchive = (archive, status) => {
     if (!canValidate.value) {
-        alert('Vous n\'avez pas les droits pour valider des documents.');
+        showNotify('Vous n\'avez pas les droits pour valider des documents.', 'error');
         return;
     }
 
     const statusLabel = status === 'validated' ? 'valider' : 'rejeter';
-    if (!confirm(`Voulez-vous ${statusLabel} ce document ?`)) return;
-
-    router.post(route('archives.validate', archive.id), {
-        status: status,
-        comment: `Document ${statusLabel} via les statistiques`
-    }, {
-        onSuccess: () => {
-            router.reload({ only: ['stats'] });
-        },
-        onError: (errors) => {
-            console.error('Erreur lors de la validation:', errors);
-            alert('Erreur lors de la validation du document.');
-        }
-    });
+    showConfirm(`Voulez-vous ${statusLabel} ce document ?`, () => {
+        router.post(route('archives.validate', archive.id), {
+            status: status,
+            comment: `Document ${statusLabel} via les statistiques`
+        }, {
+            onSuccess: () => {
+                router.reload({ only: ['stats'] });
+                showNotify(`Document ${statusLabel} avec succès`, 'success');
+            },
+            onError: (errors) => {
+                console.error('Erreur lors de la validation:', errors);
+                showNotify('Erreur lors de la validation du document.', 'error');
+            }
+        });
+    }, `${statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1)} le document`);
 };
 
 // Suppression
 const deleteArchive = (id) => {
     if (!canModify.value) {
-        alert('Vous n\'avez pas les droits pour supprimer ce document.');
+        showNotify('Vous n\'avez pas les droits pour supprimer ce document.', 'error');
         return;
     }
-    if (confirm('Supprimer définitivement ce document ?')) {
+    showConfirm('Supprimer définitivement ce document ?', () => {
         router.delete(route('archives.destroy', id), {
             onSuccess: () => {
                 router.reload({ only: ['stats'] });
+                showNotify('Document supprimé avec succès', 'success');
             },
             onError: (errors) => {
                 console.error('Erreur lors de la suppression:', errors);
-                alert('Erreur lors de la suppression du document.');
+                showNotify('Erreur lors de la suppression du document.', 'error');
             }
         });
-    }
+    }, 'Supprimer le document');
 };
 
 // Téléchargement
@@ -245,6 +278,40 @@ const downloadFile = (archive) => {
 
     <Head title="Statistiques" />
     <AuthenticatedLayout>
+        <!-- SNACKBAR -->
+        <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="3000" rounded="lg">
+            <v-icon start>{{ snackbar.icon }}</v-icon>
+            {{ snackbar.text }}
+            <template v-slot:actions>
+                <v-btn variant="text" @click="snackbar.show = false">Fermer</v-btn>
+            </template>
+        </v-snackbar>
+
+        <!-- DIALOGUE DE CONFIRMATION -->
+        <v-dialog v-model="confirmDialog" max-width="450px" persistent>
+            <v-card class="rounded-xl">
+                <v-toolbar :color="confirmTitle.includes('Supprimer') ? 'error' : 'primary'" dark>
+                    <v-icon start>{{ confirmTitle.includes('Supprimer') ? 'mdi-delete' : 'mdi-alert-circle' }}</v-icon>
+                    <v-toolbar-title>{{ confirmTitle }}</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="confirmDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <v-card-text class="pa-6">
+                    <div class="text-body-1">{{ confirmMessage }}</div>
+                </v-card-text>
+                <v-divider></v-divider>
+                <v-card-actions class="pa-4 bg-grey-lighten-4">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" @click="confirmDialog = false" class="text-none">Annuler</v-btn>
+                    <v-btn :color="confirmTitle.includes('Supprimer') ? 'error' : 'primary'" variant="flat"
+                        @click="onConfirm" class="text-none px-6">
+                        Confirmer
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
         <v-container>
             <!-- Cartes de statistiques -->
             <v-row>
