@@ -472,10 +472,10 @@ class ArchiveController extends Controller
 
     public function download(Archive $archive): StreamedResponse
     {
-        if (!Storage::disk('public')->exists($archive->fichier_path)) {
+        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
             abort(404, 'Le fichier physique est introuvable.');
         }
-        return Storage::disk('public')->download(
+        return Storage::disk('archives')->download(
             $archive->fichier_path,
             $archive->fichier_nom_original
         );
@@ -483,10 +483,10 @@ class ArchiveController extends Controller
 
     public function viewFile(Archive $archive)
     {
-        if (!Storage::disk('public')->exists($archive->fichier_path)) {
+        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
             abort(404);
         }
-        return response()->file(Storage::disk('public')->path($archive->fichier_path));
+        return response()->file(Storage::disk('archives')->path($archive->fichier_path));
     }
 
     public function destroy(Archive $archive)
@@ -498,8 +498,8 @@ class ArchiveController extends Controller
                 abort(403, 'Vous n\'avez pas les droits pour supprimer des archives.');
             }
 
-            if ($archive->fichier_path && Storage::disk('public')->exists($archive->fichier_path)) {
-                Storage::disk('public')->delete($archive->fichier_path);
+            if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
+                Storage::disk('archives')->delete($archive->fichier_path);
             }
             
             $reference = $archive->reference;
