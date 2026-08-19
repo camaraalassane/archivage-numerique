@@ -102,16 +102,17 @@ class ImportController extends Controller
 
     private function detectDate(string $fullPath, string $filename, string $extension): ?array
     {
-        return $this->getFileCreationDate($fullPath)
+        return $this->detectDateFromFilename($filename)
             ?? ($extension === 'pdf' ? $this->detectDateFromPdfContent($fullPath) : null)
-            ?? $this->detectDateFromFilename($filename);
+            ?? $this->getFileCreationDate($fullPath);
     }
 
-    private function isFileDuplicate(string $fullPath, string $filename): bool
+    private function isFileDuplicate(string $filename, int $size, int $dossierId): bool
     {
-        if (Archive::where('fichier_nom_original', $filename)->exists()) return true;
-        $reference = preg_replace('/[^A-Z0-9]/', '_', strtoupper(pathinfo($filename, PATHINFO_FILENAME)));
-        return Archive::where('reference', $reference)->exists();
+        return Archive::where('fichier_nom_original', $filename)
+            ->where('fichier_taille', $size)
+            ->where('dossier_id', $dossierId)
+            ->exists();
     }
 
     private function generateUniqueReference(string $filename): string
@@ -128,8 +129,52 @@ class ImportController extends Controller
 
     private function extractFolderName(string $relativePath): string
     {
-        $parts = explode('/', $relativePath);
-        return count($parts) > 1 ? $parts[0] : 'Racine';
+        $parts = explode('/', str_replace('\\', '/', $relativePath));
+        
+        // Si le chemin contient au moins 3 éléments (ex: 01_Janvier / Dossier_RH / ... / fichier.pdf)
+        if (count($parts) >= 3) {
+            return $parts[1]; // Le dossier cible est le 2ème niveau
+        }
+        // Si le chemin contient 2 éléments (ex: Dossier_RH / fichier.pdf)
+        if (count($parts) == 2) {
+            return $parts[0];
+        }
+        
+        return 'Racine';
+    }
+
+    private function extractMonthName(string $relativePath): ?string
+    {
+        $parts = explode('/', str_replace('\\', '/', $relativePath));
+        // Le mois est toujours le 1er niveau de dossier (ex: 01_Janvier / Dossier_RH / fichier.pdf)
+        return count($parts) >= 2 ? $parts[0] : null;
+    }
+
+    private function parseMonthNumber(?string $monthName): ?int
+    {
+        if (!$monthName) return null;
+        
+        // Try to find a number in the string (ex: "01_Janvier" -> 1)
+        if (preg_match('/^0?(\d+)/', $monthName, $matches)) {
+            $num = (int)$matches[1];
+            if ($num >= 1 && $num <= 12) return $num;
+        }
+        
+        // Try by text mapping
+        $months = [
+            'janv' => 1, 'fev' => 2, 'fév' => 2, 'mar' => 3, 'avr' => 4,
+            'mai' => 5, 'juin' => 6, 'juil' => 7, 'aou' => 8, 'aoû' => 8,
+            'sep' => 9, 'oct' => 10, 'nov' => 11, 'dec' => 12, 'déc' => 12
+        ];
+        
+        $lower = mb_strtolower($monthName, 'UTF-8');
+        foreach ($months as $key => $num) {
+            if (str_contains($lower, $key)) {
+                return $num;
+            }
+        }
+        
+        return null;
     }
 
     public function scanDirectory(Request $request)
@@ -151,24 +196,51 @@ class ImportController extends Controller
         $allowedExtensions = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx', 'txt'];
 
         $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
+            new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
         );
 
         foreach ($iterator as $file) {
-            if ($file->isFile()) {
+            if ($file->isDir()) {
+                $fi = new \FilesystemIterator($file->getPathname(), \FilesystemIterator::SKIP_DOTS);
+                if (!iterator_count($fi)) {
+                    $fullFilePath = str_replace('\\', '/', $file->getPathname());
+                    $relativePath = ltrim(str_replace($path, '', $fullFilePath), '/');
+                    $folderParts = explode('/', $relativePath);
+                    $folderName = count($folderParts) > 0 ? end($folderParts) : 'Racine';
+                    $monthFolder = count($folderParts) > 1 ? $folderParts[count($folderParts) - 2] : null;
+
+                    $files[] = [
+                        'name' => 'empty.txt',
+                        'path' => $relativePath . '/empty.txt',
+                        'folder' => $folderName,
+                        'month_folder' => $monthFolder,
+                        'extension' => 'txt',
+                        'size' => 0,
+                        'exists' => false,
+                        'is_empty_dir' => true,
+                        'detected_date' => null,
+                        'detected_year' => null,
+                        'detected_month' => null,
+                    ];
+                }
+            } elseif ($file->isFile()) {
                 $extension = strtolower($file->getExtension());
                 if (in_array($extension, $allowedExtensions)) {
                     $fullFilePath = str_replace('\\', '/', $file->getPathname());
                     $relativePath = ltrim(str_replace($path, '', $fullFilePath), '/');
                     $folderName = $this->extractFolderName($relativePath);
+                    $monthFolder = $this->extractMonthName($relativePath);
                     $detected = $this->detectDate($fullFilePath, $file->getFilename(), $extension);
                     $files[] = [
                         'name' => $file->getFilename(),
                         'path' => $relativePath,
                         'folder' => $folderName,
+                        'month_folder' => $monthFolder,
                         'extension' => $extension,
                         'size' => $file->getSize(),
-                        'exists' => $this->isFileDuplicate($fullFilePath, $file->getFilename()),
+                        'exists' => false,
+                        'is_empty_dir' => false,
                         'detected_date' => $detected['date'] ?? null,
                         'detected_year' => $detected['year'] ?? null,
                         'detected_month' => $detected['month'] ?? null,
@@ -191,11 +263,45 @@ class ImportController extends Controller
         ]);
     }
 
+    private function getOrCreateDossier(int $moisId, string $folderName): Dossier
+    {
+        $dossier = Dossier::where('mois_id', $moisId)->where('nom', $folderName)->first();
+        if (!$dossier) {
+            $moisModel = DossierMois::with('annee')->find($moisId);
+            $anneeClean = $moisModel->annee->annee;
+            $moisClean = $moisModel->mois;
+            
+            // Generate clean name without accents
+            $nomClean = strtoupper(preg_replace('/[^A-Za-z0-9]/', '_',
+                iconv('UTF-8', 'ASCII//TRANSLIT', $folderName)
+            ));
+
+            $codeUnique = "DOSSIER_{$anneeClean}_{$moisClean}_{$nomClean}";
+            $codeCounter = 1;
+            $finalCode = $codeUnique;
+            while (Dossier::where('code', $finalCode)->exists()) {
+                $finalCode = $codeUnique . '_' . $codeCounter;
+                $codeCounter++;
+            }
+
+            $dossier = Dossier::create([
+                'mois_id' => $moisId,
+                'nom' => $folderName,
+                'code' => $finalCode,
+                'active' => true,
+                'couleur' => '#1976D2',
+                'description' => 'Dossier généré automatiquement par l\'import'
+            ]);
+        }
+        
+        $dossier->load('mois.annee');
+        return $dossier;
+    }
+
     public function importFiles(Request $request)
     {
         $user = Auth::user();
 
-        // Seul Admin peut importer
         if (!$user->isAdmin()) {
             return response()->json(['error' => 'Accès non autorisé'], 403);
         }
@@ -203,15 +309,16 @@ class ImportController extends Controller
         $files = $request->input('files', []);
         $basePath = str_replace('\\', '/', rtrim($request->input('base_path'), '/'));
         $fallbackDate = $request->input('date_document') ?: date('Y-m-d');
-
-        $folderMapping = $request->input('folder_mapping', []);
+        
+        $globalMoisId = $request->input('mois_id');
+        $anneeId = $request->input('annee_id');
 
         if (empty($files)) {
             return response()->json(['error' => 'Aucun fichier à importer'], 400);
         }
 
-        if (empty($folderMapping)) {
-            return response()->json(['error' => 'Aucun mapping de dossier fourni'], 400);
+        if (!$globalMoisId && !$anneeId) {
+            return response()->json(['error' => 'Veuillez sélectionner un mois ou une année cible'], 400);
         }
 
         $imported = 0;
@@ -219,52 +326,53 @@ class ImportController extends Controller
         $duplicates = 0;
         $results = [];
 
-        $filesByFolder = [];
         foreach ($files as $file) {
-            $folder = $file['folder'] ?? 'Racine';
-            $filesByFolder[$folder][] = $file;
-        }
-
-        foreach ($filesByFolder as $folderName => $folderFiles) {
-            $targetDossierId = $folderMapping[$folderName] ?? null;
-
-            if (!$targetDossierId) {
-                continue;
-            }
-
-            $dossier = Dossier::with(['mois.annee'])->find($targetDossierId);
-            if (!$dossier) {
-                foreach ($folderFiles as $file) {
+            $moisId = $globalMoisId;
+            if ($anneeId) {
+                $monthRaw = $this->extractMonthName($file['path'] ?? '');
+                $monthNum = $this->parseMonthNumber($monthRaw);
+                if ($monthNum) {
+                    $moisModel = DossierMois::where('annee_id', $anneeId)->where('mois', $monthNum)->first();
+                    if ($moisModel) {
+                        $moisId = $moisModel->id;
+                    } else {
+                        $results[] = ['file' => $file['name'], 'success' => false, 'error' => "Mois introuvable en base pour le dossier '{$monthRaw}'"];
+                        $errors++;
+                        continue;
+                    }
+                } else {
+                    $results[] = ['file' => $file['name'], 'success' => false, 'error' => "Impossible de détecter le mois dans le chemin"];
                     $errors++;
-                    $results[] = [
-                        'file' => $file['name'],
-                        'success' => false,
-                        'is_duplicate' => false,
-                        'error' => "Dossier cible introuvable (id: $targetDossierId)",
-                    ];
+                    continue;
                 }
+            }
+
+            // Check if year is closed
+            $moisModel = DossierMois::with('annee')->find($moisId);
+            if ($moisModel && $moisModel->annee && $moisModel->annee->cloturee) {
+                $results[] = ['file' => $file['name'], 'success' => false, 'error' => "L'année cible est clôturée"];
+                $errors++;
                 continue;
             }
 
-            if ($dossier->mois && $dossier->mois->annee && $dossier->mois->annee->cloturee) {
-                foreach ($folderFiles as $file) {
-                    $errors++;
-                    $results[] = [
-                        'file' => $file['name'],
-                        'success' => false,
-                        'is_duplicate' => false,
-                        'error' => "Année clôturée — impossible d'importer dans \"{$dossier->nom}\"",
-                    ];
-                }
+            $folderName = $file['folder'] ?? 'Racine';
+            $dossier = $this->getOrCreateDossier($moisId, $folderName);
+
+            if (!empty($file['is_empty_dir'])) {
+                $results[] = ['file' => 'Dossier vide (' . $folderName . ')', 'success' => true];
+                $imported++;
                 continue;
             }
 
-            foreach ($folderFiles as $file) {
-                $result = $this->importSingleFile($file, $basePath, $dossier, $fallbackDate);
-                $results[] = $result;
-                if ($result['success']) $imported++;
-                elseif ($result['is_duplicate']) $duplicates++;
-                else $errors++;
+            $result = $this->importSingleFile($file, $basePath, $dossier, $fallbackDate);
+            $results[] = $result;
+            
+            if ($result['success']) {
+                $imported++;
+            } elseif (isset($result['is_duplicate']) && $result['is_duplicate']) {
+                $duplicates++;
+            } else {
+                $errors++;
             }
         }
 
@@ -272,7 +380,7 @@ class ImportController extends Controller
             'imported' => $imported,
             'errors' => $errors,
             'duplicates' => $duplicates,
-            'results' => $results,
+            'results' => $results
         ]);
     }
 
@@ -290,7 +398,7 @@ class ImportController extends Controller
             $dateDocument = $detected['date'] ?? $fallbackDate;
         }
 
-        if ($this->isFileDuplicate($fullPath, $file['name'])) {
+        if ($this->isFileDuplicate($file['name'], $file['size'], $dossier->id)) {
             return ['file' => $file['name'], 'success' => false, 'is_duplicate' => true, 'error' => 'Doublon'];
         }
 
@@ -346,26 +454,73 @@ class ImportController extends Controller
         $request->validate([
             'file' => 'required|file',
             'folder' => 'required|string',
-            'dossier_id' => 'required|exists:dossiers,id',
+            'mois_id' => 'required_without:annee_id|nullable|exists:dossier_mois,id',
+            'annee_id' => 'required_without:mois_id|nullable|exists:dossier_annees,id',
+            'relative_path' => 'nullable|string',
             'detected_date' => 'nullable|date',
-            'fallback_date' => 'required|date'
+            'fallback_date' => 'nullable|date'
         ]);
 
+        $folderName = $request->input('folder') ?? 'Racine';
+        
+        if ($request->filled('annee_id')) {
+            $monthRaw = $this->extractMonthName($request->input('relative_path') ?? '');
+            $monthNum = $this->parseMonthNumber($monthRaw);
+            if ($monthNum) {
+                $moisModel = DossierMois::where('annee_id', $request->input('annee_id'))
+                    ->where('mois', $monthNum)
+                    ->first();
+                if ($moisModel) {
+                    $moisId = $moisModel->id;
+                } else {
+                    return response()->json(['error' => "Mois introuvable en base pour le dossier '{$monthRaw}'"], 400);
+                }
+            } else {
+                 return response()->json(['error' => "Impossible de détecter le mois dans le chemin : " . ($request->input('relative_path') ?? 'aucun') . " (Attendu ex: '01_Janvier')"], 400);
+            }
+        } else {
+            $moisId = $request->input('mois_id');
+        }
+
+        // Handle empty directory creation
+        if ($request->filled('is_empty_dir')) {
+            $this->getOrCreateDossier($moisId, $folderName);
+            return response()->json(['success' => true]);
+        }
+
         $file = $request->file('file');
-        $dossierId = $request->input('dossier_id');
-        $dateDocument = $request->input('detected_date') ?: $request->input('fallback_date');
         $originalName = $file->getClientOriginalName();
         $extension = strtolower($file->getClientOriginalExtension());
         $mimeType = $file->getMimeType();
         $size = $file->getSize();
 
-        $dossier = Dossier::with(['mois.annee'])->find($dossierId);
+        $dateDocument = $request->input('detected_date');
+        if (empty($dateDocument) || $dateDocument === 'null') {
+            $detected = $this->detectDate($file->getPathname(), $originalName, $extension);
+            $dateDocument = $detected['date'] ?? null;
+            
+            // Si pas de date trouvée dans le fichier, on prend la date OS (ordi local)
+            if (empty($dateDocument)) {
+                $osDate = $request->input('os_date');
+                if (!empty($osDate) && $osDate !== 'null') {
+                    $dateDocument = $osDate;
+                }
+            }
+            
+            // Final fallback
+            if (empty($dateDocument)) {
+                $dateDocument = $request->input('fallback_date') ?: now()->toDateString();
+            }
+        }
+
+        // Créer ou récupérer le dossier
+        $dossier = $this->getOrCreateDossier($moisId, $folderName);
         
         if ($dossier->mois->annee->cloturee) {
             return response()->json(['error' => "Année clôturée"], 400);
         }
 
-        if ($this->isFileDuplicate('', $originalName)) {
+        if ($this->isFileDuplicate($originalName, $size, $dossier->id)) {
             return response()->json(['error' => 'Doublon', 'is_duplicate' => true], 400);
         }
 
@@ -389,7 +544,6 @@ class ImportController extends Controller
                 'date_document' => $dateDocument,
                 'created_by' => $user->id,
                 'validation_status' => Archive::STATUS_PENDING,
-                'chemin' => $dossier->chemin ?? null,
             ]);
             
             \App\Models\ActivityLog::log('archive_created', "A importé le document {$archive->reference} : {$archive->titre} via le scan de masse");
@@ -406,8 +560,13 @@ class ImportController extends Controller
             if ($e->errorInfo[1] == 1062) {
                 return response()->json(['error' => 'Doublon (référence existante)', 'is_duplicate' => true], 400);
             }
+            \Illuminate\Support\Facades\Log::error('UploadMass DB Error: ' . $e->getMessage(), ['file' => $originalName]);
             return response()->json(['error' => 'Erreur BDD: ' . $e->getMessage()], 500);
         } catch (\Exception $e) {
+            if ($e instanceof \Illuminate\Validation\ValidationException) {
+                throw $e;
+            }
+            \Illuminate\Support\Facades\Log::error('UploadMass Exception: ' . $e->getMessage(), ['file' => $originalName, 'trace' => $e->getTraceAsString()]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }

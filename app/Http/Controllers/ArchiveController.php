@@ -31,10 +31,17 @@ class ArchiveController extends Controller
         }
 
         $query->when($request->search, function ($q, $search) {
-            $q->where(function ($sub) use ($search) {
-                $sub->where('titre', 'like', "%{$search}%")
-                    ->orWhere('reference', 'like', "%{$search}%")
-                    ->orWhere('mots_cles', 'like', "%{$search}%");
+            // Remplacer les espaces par % pour permettre une recherche plus souple
+            // ex: "ARRETE 2021 5995" matchera "ARRETE_2021-5995"
+            $flexibleSearch = '%' . preg_replace('/\s+/', '%', trim($search)) . '%';
+            
+            $q->where(function ($sub) use ($flexibleSearch, $search) {
+                $sub->where('titre', 'like', $flexibleSearch)
+                    ->orWhere('reference', 'like', $flexibleSearch)
+                    ->orWhere('mots_cles', 'like', $flexibleSearch)
+                    // On garde aussi la recherche stricte au cas où
+                    ->orWhere('titre', 'like', "%{$search}%")
+                    ->orWhere('reference', 'like', "%{$search}%");
             });
         })
         ->when($request->dossier_id, fn($q, $d) => $q->where('dossier_id', $d))
@@ -65,48 +72,30 @@ class ArchiveController extends Controller
         ]);
     }
 
-    private function checkDuplicate($reference, $dossierId, $fileName = null)
+    private function checkDuplicate($reference, $dossierId, $fileName = null, $fileSize = null)
     {
-        $existing = Archive::where('reference', $reference)
-            ->where('dossier_id', $dossierId)
-            ->first();
+        $existing = Archive::where('reference', $reference)->first();
 
         if ($existing) {
             return [
                 'exists' => true,
-                'message' => "Un document avec la référence '{$reference}' existe déjà dans ce dossier.",
+                'message' => "Un document avec la référence '{$reference}' existe déjà dans le système.",
                 'archive' => $existing
             ];
         }
 
-        if ($fileName) {
-            $existingByName = Archive::where('fichier_nom_original', $fileName)
+        if ($fileName && $fileSize) {
+            $existingExact = Archive::where('fichier_nom_original', $fileName)
+                ->where('fichier_taille', $fileSize)
                 ->where('dossier_id', $dossierId)
                 ->first();
 
-            if ($existingByName) {
+            if ($existingExact) {
                 return [
                     'exists' => true,
-                    'message' => "Un fichier nommé '{$fileName}' existe déjà dans ce dossier.",
-                    'archive' => $existingByName
+                    'message' => "Le fichier '{$fileName}' (même taille) existe déjà dans ce dossier.",
+                    'archive' => $existingExact
                 ];
-            }
-        }
-
-        if ($fileName) {
-            $titreBase = pathinfo($fileName, PATHINFO_FILENAME);
-            if ($titreBase) {
-                $existingByTitle = Archive::where('titre', 'LIKE', $titreBase . '%')
-                    ->where('dossier_id', $dossierId)
-                    ->first();
-
-                if ($existingByTitle) {
-                    return [
-                        'exists' => true,
-                        'message' => "Un document avec un titre similaire '{$existingByTitle->titre}' existe déjà dans ce dossier.",
-                        'archive' => $existingByTitle
-                    ];
-                }
             }
         }
 
@@ -231,7 +220,7 @@ class ArchiveController extends Controller
             $dossierId = $validated['dossier_id'];
             $fileName = $request->file('fichier')->getClientOriginalName();
 
-            $duplicateCheck = $this->checkDuplicate($reference, $dossierId, $fileName);
+            $duplicateCheck = $this->checkDuplicate($reference, $dossierId, $fileName, $request->file('fichier')->getSize());
 
             if ($duplicateCheck['exists']) {
                 \Log::warning('Tentative de doublon détectée', [
@@ -351,7 +340,7 @@ class ArchiveController extends Controller
                 $microtimeToken = substr(str_replace('.', '', microtime(true)), -5);
                 $tempRef = substr($cleanedRef, 0, 25) . '_' . $index . '_' . $microtimeToken;
 
-                $duplicateCheck = $this->checkDuplicate($tempRef, $dossier->id, $originalName);
+                $duplicateCheck = $this->checkDuplicate($tempRef, $dossier->id, $originalName, $file->getSize());
 
                 if ($duplicateCheck['exists']) {
                     $duplicates[] = [
@@ -546,8 +535,11 @@ class ArchiveController extends Controller
             }
 
             $query->when($request->search, function ($q, $search) {
-                $q->where(function ($sub) use ($search) {
-                    $sub->where('titre', 'like', "%{$search}%")
+                $flexibleSearch = '%' . preg_replace('/\s+/', '%', trim($search)) . '%';
+                $q->where(function ($sub) use ($flexibleSearch, $search) {
+                    $sub->where('titre', 'like', $flexibleSearch)
+                        ->orWhere('reference', 'like', $flexibleSearch)
+                        ->orWhere('titre', 'like', "%{$search}%")
                         ->orWhere('reference', 'like', "%{$search}%");
                 });
             })

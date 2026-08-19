@@ -30,3 +30,8 @@ php.ini
 public/images/
 storage/
 bootstrap/cache/
+archive/
+*.sqlite
+*.sqlite3
+public/archives/
+database/*.sqlite

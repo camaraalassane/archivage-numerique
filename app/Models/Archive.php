@@ -267,4 +267,21 @@ class Archive extends Model
         }
         return round($bytes, 2) . ' ' . $units[$i];
     }
+
+    protected static function booted()
+    {
+        static::saved(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+            if (auth()->check()) {
+                \Illuminate\Support\Facades\Cache::forget('dashboard_stats_user_' . auth()->id());
+            }
+        });
+
+        static::deleted(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+            if (auth()->check()) {
+                \Illuminate\Support\Facades\Cache::forget('dashboard_stats_user_' . auth()->id());
+            }
+        });
+    }
 }

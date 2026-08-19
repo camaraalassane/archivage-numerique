@@ -31,4 +31,15 @@ class DossierMois extends Model
     {
         return $this->hasManyThrough(Archive::class, Dossier::class, 'mois_id', 'dossier_id');
     }
+
+    protected static function booted()
+    {
+        static::saved(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+        });
+
+        static::deleted(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+        });
+    }
 }

@@ -35,9 +35,9 @@ const results = ref([]);
 const showResults = ref(false);
 const folders = ref([]);
 const expandedFolders = ref(new Set());
-
-const filterMoisId = ref(null);
-const folderMapping = ref({});
+const targetMoisId = ref(null);
+const targetAnneeId = ref(null);
+const monthMappings = ref({}); // { "01_Janvier": 1 } (maps monthFolder string to a mois_id)
 
 const snackbar = ref({ show: false, text: '', color: 'success', timeout: 5000 });
 
@@ -58,11 +58,6 @@ const dossiersWithPath = computed(() => {
     });
 });
 
-const filteredDossiers = computed(() => {
-    if (!filterMoisId.value) return dossiersWithPath.value;
-    return dossiersWithPath.value.filter(d => d.mois_id === filterMoisId.value);
-});
-
 const moisWithAnnee = computed(() => {
     return props.mois.map(m => {
         const annee = props.annees.find(a => a.id === m.annee_id);
@@ -73,6 +68,22 @@ const moisWithAnnee = computed(() => {
     });
 });
 
+const moisOfSelectedAnnee = computed(() => {
+    if (!targetAnneeId.value) return [];
+    return props.mois.filter(m => m.annee_id === targetAnneeId.value).map(m => ({
+        ...m,
+        label: m.nom_mois
+    }));
+});
+
+const uniqueMonthFolders = computed(() => {
+    const s = new Set();
+    selectedFiles.value.forEach(f => {
+        if (f.month_folder) s.add(f.month_folder);
+    });
+    return Array.from(s).sort();
+});
+
 const selectedCount = computed(() =>
     selectedFiles.value.filter(f => f.selected && !f.exists).length
 );
@@ -80,14 +91,32 @@ const selectedCount = computed(() =>
 const canImportAction = computed(() => {
     if (!canImport.value) return false;
     if (selectedCount.value === 0) return false;
-    return folders.value.some(f =>
-        folderMapping.value[f] &&
-        selectedFiles.value.some(sf => sf.folder === f && sf.selected && !sf.exists)
-    );
+    if (!targetMoisId.value && !targetAnneeId.value) return false;
+    
+    if (targetAnneeId.value) {
+        // En mode année, il faut au moins un dossier mappé
+        const hasMapping = uniqueMonthFolders.value.some(mFolder => monthMappings.value[mFolder]);
+        if (!hasMapping) return false;
+    }
+    
+    return true;
 });
 
-const resetFilter = () => {
-    filterMoisId.value = null;
+const autoMapMonths = () => {
+    if (!targetAnneeId.value) return;
+    uniqueMonthFolders.value.forEach(mFolder => {
+        if (!monthMappings.value[mFolder]) {
+            // Tentative de détection (ex: "01_Janvier" -> cherche "Janvier" ou "1")
+            const lowerFolder = mFolder.toLowerCase();
+            const match = moisOfSelectedAnnee.value.find(m => 
+                lowerFolder.includes(m.nom_mois.toLowerCase()) || 
+                lowerFolder.startsWith(m.mois.toString().padStart(2, '0'))
+            );
+            if (match) {
+                monthMappings.value[mFolder] = match.id;
+            }
+        }
+    });
 };
 
 // ============================================
@@ -116,8 +145,8 @@ const scanDirectory = async () => {
 
         selectedFiles.value = response.data.files.map(f => ({ ...f, selected: !f.exists }));
         folders.value = response.data.folders || [];
-        initializeMapping();
         showNotification(`${selectedFiles.value.length} fichier(s) détecté(s).`, 'success');
+        expandedFolders.value = new Set(folders.value);
     } catch (error) {
         console.error(error);
         showNotification('Erreur lors du scan.', 'error');
@@ -130,9 +159,9 @@ const scanDirectory = async () => {
 // MODE LOCAL (Glisser-Déposer)
 // ============================================
 const detectDateFromFilename = (filename) => {
-    let m = filename.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
+    let m = filename.match(/(19\d{2}|20\d{2})[-_](0[1-9]|1[0-2])[-_](0[1-9]|[12]\d|3[01])/);
     if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-    m = filename.match(/(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)/);
+    m = filename.match(/(?<!\d)(19\d{2}|20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/);
     if (m) return `${m[1]}-${m[2]}-${m[3]}`;
     return null;
 };
@@ -154,19 +183,60 @@ const handleDrop = async (e) => {
                 entry.file(file => {
                     const ext = file.name.split('.').pop().toLowerCase();
                     if (allowedExts.includes(ext)) {
-                        const relPath = path ? `${path}/${file.name}` : file.name;
-                        const folderParts = relPath.split('/');
-                        const folder = folderParts.length > 1 ? folderParts[0] : 'Racine';
+                                // Le relPath contient tous les dossiers depuis l'élément glissé
+                                const relPath = path ? `${path}/${file.name}` : file.name;
+                                const folderParts = relPath.split('/');
+                                
+                                // En mode glisser-déposer, si l'utilisateur glisse le dossier Année,
+                                // folderParts[0] = Année, folderParts[1] = Mois, folderParts[2] = Dossier
+                                // S'il glisse les dossiers Mois,
+                                let monthFolder = null;
+                                let folder = 'Racine';
+                                
+                                if (targetMoisId.value) {
+                                    // Mode "Mois"
+                                    if (folderParts.length >= 2) {
+                                        if (folderParts[0].match(/janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre|[0-9]{2}_/i)) {
+                                            monthFolder = folderParts[0];
+                                            folder = folderParts.length >= 2 ? folderParts[1] : 'Racine';
+                                        } else {
+                                            monthFolder = null;
+                                            folder = folderParts[0];
+                                        }
+                                    } else {
+                                        monthFolder = null;
+                                        folder = 'Racine';
+                                    }
+                                } else {
+                                    // Mode "Annee"
+                                    if (folderParts.length >= 3) {
+                                        if (folderParts[0].toUpperCase().includes('ANNEE') || folderParts[0].match(/20\d{2}/)) {
+                                            monthFolder = folderParts[1];
+                                            folder = folderParts.length >= 4 ? folderParts[2] : 'Racine';
+                                        } else {
+                                            // S'ils ont glissé directement les mois
+                                            monthFolder = folderParts[0];
+                                            folder = folderParts[1];
+                                        }
+                                    } else if (folderParts.length === 2) {
+                                        monthFolder = folderParts[0];
+                                        folder = 'Racine';
+                                    } else {
+                                        folder = folderParts[0];
+                                    }
+                                }
                         
                         tempFiles.push({
                             fileObj: file,
                             name: file.name,
                             path: relPath,
                             folder: folder,
+                            month_folder: monthFolder,
                             extension: ext,
                             size: file.size,
                             detected_date: detectDateFromFilename(file.name),
-                            exists: false, // Check doublons pas fait ici (fait au serveur)
+                            os_date: new Date(file.lastModified).toISOString().split('T')[0],
+                            exists: false,
                             selected: true
                         });
                     }
@@ -176,12 +246,77 @@ const handleDrop = async (e) => {
         } else if (entry.isDirectory) {
             return new Promise(resolve => {
                 const dirReader = entry.createReader();
-                dirReader.readEntries(async entries => {
-                    for (const child of entries) {
-                        await readEntry(child, path ? `${path}/${entry.name}` : entry.name);
-                    }
-                    resolve();
-                });
+                let hasEntries = false;
+                
+                const readAllEntries = () => {
+                    dirReader.readEntries(async entries => {
+                        if (entries.length === 0) {
+                            if (!hasEntries) {
+                                // Dossier complètement vide
+                                const relPath = path ? `${path}/${entry.name}` : entry.name;
+                                const folderParts = relPath.split('/');
+                                
+                                let monthFolder = null;
+                                let folder = 'Racine';
+                                
+                                if (targetMoisId.value) {
+                                    // Mode "Mois": the user drags subfolders directly, OR month folders.
+                                    if (folderParts.length >= 2) {
+                                        if (folderParts[0].match(/janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre|[0-9]{2}_/i)) {
+                                            // e.g. "07_Juillet/Dossier_A/file.pdf"
+                                            monthFolder = folderParts[0];
+                                            folder = folderParts.length >= 2 ? folderParts[1] : 'Racine';
+                                        } else {
+                                            // e.g. "Dossier_A/file.pdf"
+                                            monthFolder = null; // We already have targetMoisId, so we don't care
+                                            folder = folderParts[0];
+                                        }
+                                    } else {
+                                        // e.g. "file.pdf"
+                                        monthFolder = null;
+                                        folder = 'Racine';
+                                    }
+                                } else {
+                                    // Mode "Annee"
+                                    if (folderParts.length >= 2) {
+                                        if (folderParts[0].toUpperCase().includes('ANNEE') || folderParts[0].match(/20\d{2}/)) {
+                                            monthFolder = folderParts[1] || null;
+                                            folder = folderParts.length >= 3 ? folderParts[2] : 'Racine';
+                                        } else {
+                                            monthFolder = folderParts[0];
+                                            folder = folderParts.length >= 2 ? folderParts[1] : 'Racine';
+                                        }
+                                    } else if (folderParts.length === 1) {
+                                        monthFolder = folderParts[0];
+                                    }
+                                }
+                                
+                                tempFiles.push({
+                                    fileObj: new File([""], "empty.txt", { type: "text/plain" }),
+                                    name: "empty.txt", // Nom factice pour affichage et backend
+                                    path: relPath + "/empty.txt",
+                                    folder: folder,
+                                    month_folder: monthFolder,
+                                    extension: "txt",
+                                    size: 0,
+                                    detected_date: null,
+                                    os_date: null,
+                                    exists: false,
+                                    is_empty_dir: true,
+                                    selected: true
+                                });
+                            }
+                            resolve();
+                        } else {
+                            hasEntries = true;
+                            for (const child of entries) {
+                                await readEntry(child, path ? `${path}/${entry.name}` : entry.name);
+                            }
+                            readAllEntries();
+                        }
+                    });
+                };
+                readAllEntries();
             });
         }
     };
@@ -207,7 +342,7 @@ const handleDrop = async (e) => {
     const uniqueFolders = new Set(tempFiles.map(f => f.folder));
     folders.value = Array.from(uniqueFolders);
     
-    initializeMapping();
+    expandedFolders.value = new Set(folders.value);
     scanning.value = false;
     showNotification(`${tempFiles.length} fichier(s) détecté(s) localement.`, 'success');
 };
@@ -216,16 +351,8 @@ const resetLists = () => {
     selectedFiles.value = [];
     localFilesData.value = [];
     folders.value = [];
-    folderMapping.value = {};
     expandedFolders.value = new Set();
     showResults.value = false;
-};
-
-const initializeMapping = () => {
-    const mapping = {};
-    folders.value.forEach(f => { mapping[f] = null; });
-    folderMapping.value = mapping;
-    folders.value.forEach(f => expandedFolders.value.add(f));
 };
 
 // ============================================
@@ -258,16 +385,37 @@ const importFiles = async () => {
     errorCount.value = 0;
     duplicateCount.value = 0;
 
-    const filesToImport = selectedFiles.value.filter(f => f.selected && !f.exists);
+    let filesToImport = selectedFiles.value.filter(f => f.selected && !f.exists);
+
+    if (targetAnneeId.value) {
+        // Ignorer les fichiers dont le mois n'a pas été associé
+        filesToImport = filesToImport.filter(f => monthMappings.value[f.month_folder]);
+    }
+    
+    if (filesToImport.length === 0) {
+        showNotification('Aucun fichier sélectionné avec un mois cible valide.', 'warning');
+        isLoading.value = false;
+        return;
+    }
 
     if (importMode.value === 'server') {
-        // Envoi au serveur (ancien système)
+        // Envoi au serveur
         try {
             const response = await axios.post('/import/process', {
-                files: filesToImport.map(f => ({ name: f.name, path: f.path, folder: f.folder, extension: f.extension, size: f.size, detected_date: f.detected_date })),
+                files: filesToImport.map(f => ({ 
+                    name: f.name, 
+                    path: f.path, 
+                    folder: f.folder, 
+                    extension: f.extension, 
+                    size: f.size, 
+                    detected_date: f.detected_date,
+                    is_empty_dir: f.is_empty_dir || false,
+                    // Si on est en mode année, on envoie le mois_id mappé pour chaque fichier !
+                    mois_id: targetAnneeId.value ? monthMappings.value[f.month_folder] : targetMoisId.value
+                })),
                 base_path: importPath.value,
                 date_document: dateDocument.value,
-                folder_mapping: folderMapping.value,
+                mois_id: targetMoisId.value, // Global fallback
             });
             handleProcessResponse(response.data);
         } catch (error) {
@@ -278,9 +426,6 @@ const importFiles = async () => {
         uploadProgress.value = { current: 0, total: filesToImport.length };
         
         for (const fileMeta of filesToImport) {
-            const dossierId = folderMapping.value[fileMeta.folder];
-            if (!dossierId) continue;
-
             const actualFile = localFilesData.value.find(f => f.path === fileMeta.path)?.fileObj;
             if (!actualFile) {
                 errorCount.value++;
@@ -291,10 +436,18 @@ const importFiles = async () => {
             const formData = new FormData();
             formData.append('file', actualFile);
             formData.append('folder', fileMeta.folder);
-            formData.append('dossier_id', dossierId);
+            formData.append('relative_path', fileMeta.path);
+            
+            // Injection du mois_id précis basé sur le mapping si on est en mode Année
+            const finalMoisId = targetAnneeId.value ? monthMappings.value[fileMeta.month_folder] : targetMoisId.value;
+            if (finalMoisId) formData.append('mois_id', finalMoisId);
+            
             formData.append('fallback_date', dateDocument.value);
             if (fileMeta.detected_date) formData.append('detected_date', fileMeta.detected_date);
+            if (fileMeta.os_date) formData.append('os_date', fileMeta.os_date);
 
+            if (fileMeta.is_empty_dir) formData.append('is_empty_dir', '1');
+            
             try {
                 const response = await axios.post('/import/upload-mass', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' }
@@ -308,7 +461,11 @@ const importFiles = async () => {
                     results.value.push({ file: fileMeta.name, success: false, is_duplicate: true, error: error.response.data.error });
                 } else {
                     errorCount.value++;
-                    results.value.push({ file: fileMeta.name, success: false, error: error.response?.data?.error || 'Erreur serveur' });
+                    let errMsg = error.response?.data?.error || 'Erreur serveur';
+                    if (error.response?.data?.errors) {
+                        errMsg = Object.values(error.response.data.errors).flat().join(', ');
+                    }
+                    results.value.push({ file: fileMeta.name, success: false, error: errMsg });
                 }
             }
             uploadProgress.value.current++;
@@ -357,11 +514,6 @@ const formatSize = (bytes) => {
 };
 
 const getDossierById = (id) => dossiersWithPath.value.find(d => d.id === id);
-
-const mappedCount = computed(() => {
-    return Object.values(folderMapping.value).filter(id => id !== null).length;
-});
-const availableDossiersCount = computed(() => filteredDossiers.value.length);
 </script>
 
 <template>
@@ -465,87 +617,91 @@ const availableDossiersCount = computed(() => filteredDossiers.value.length);
                             <v-row v-if="folders.length > 0 && canImport">
                                 <v-col cols="12">
                                     <v-divider class="my-4"></v-divider>
+                                    <!-- SELECTION DU MOIS CIBLE -->
+                                    <v-divider class="my-4"></v-divider>
                                     <h4 class="text-subtitle-1 font-weight-bold mb-1">
-                                        Assignation des dossiers détectés
+                                        Configuration de l'importation
                                     </h4>
                                     
-                                    <div class="bg-grey-lighten-5 pa-3 rounded-lg mb-4">
-                                        <div class="d-flex align-center flex-wrap gap-3">
-                                            <span class="text-caption font-weight-medium text-grey">
-                                                <v-icon size="small" class="mr-1">mdi-filter</v-icon>
-                                                Filtrer les cibles par mois :
-                                            </span>
-                                            <v-select v-model="filterMoisId" :items="moisWithAnnee" item-title="label"
-                                                item-value="id" label="Mois" variant="solo" density="compact"
-                                                hide-details flat clearable style="max-width: 280px;">
-                                                <template v-slot:prepend-inner>
-                                                    <v-icon color="primary" size="small">mdi-calendar-month</v-icon>
-                                                </template>
-                                                <template v-slot:item="{ item, props: itemProps }">
-                                                    <v-list-item v-bind="itemProps">
-                                                        <div class="d-flex align-center">
-                                                            <v-icon size="small" class="mr-2">mdi-calendar</v-icon>
-                                                            {{ item.raw.label }}
+                                    <div class="bg-grey-lighten-5 pa-4 rounded-lg mb-4">
+                                        <div class="d-flex align-center flex-wrap gap-4">
+                                            <div style="flex: 1; min-width: 300px;">
+                                                <v-row>
+                                                    <v-col cols="12" md="6">
+                                                        <div class="text-caption font-weight-medium text-grey mb-1">
+                                                            <v-icon size="small" class="mr-1">mdi-calendar-range</v-icon>
+                                                            Importer par Année (Détection auto des mois) :
                                                         </div>
-                                                    </v-list-item>
-                                                </template>
-                                                <template v-slot:selection="{ item }">
-                                                    <div class="d-flex align-center">
-                                                        <v-icon size="small" class="mr-2">mdi-calendar</v-icon>
-                                                        {{ item.raw.label }}
+                                                        <v-select v-model="targetAnneeId" :items="props.annees" item-title="annee"
+                                                            item-value="id" label="Année cible" variant="outlined" density="comfortable"
+                                                            hide-details @update:modelValue="val => { if (val) { targetMoisId = null; autoMapMonths(); } }"
+                                                            clearable>
+                                                            <template v-slot:prepend-inner>
+                                                                <v-icon color="primary" size="small">mdi-calendar-range</v-icon>
+                                                            </template>
+                                                        </v-select>
+                                                    </v-col>
+                                                    
+                                                    <v-col cols="12" md="6">
+                                                        <div class="text-caption font-weight-medium text-grey mb-1">
+                                                            <v-icon size="small" class="mr-1">mdi-calendar-month</v-icon>
+                                                            OU Importer dans un Mois précis :
+                                                        </div>
+                                                        <v-select v-model="targetMoisId" :items="moisWithAnnee" item-title="label"
+                                                            item-value="id" label="Mois cible" variant="outlined" density="comfortable"
+                                                            hide-details @update:modelValue="targetMoisId ? targetAnneeId = null : null"
+                                                            clearable>
+                                                            <template v-slot:prepend-inner>
+                                                                <v-icon color="primary" size="small">mdi-calendar-month</v-icon>
+                                                            </template>
+                                                        </v-select>
+                                                    </v-col>
+                                                </v-row>
+                                                
+                                                <!-- UI Mapping des mois détectés -->
+                                                <div v-if="targetAnneeId && uniqueMonthFolders.length > 0" class="mt-4 pt-3 border-t">
+                                                    <div class="text-caption font-weight-medium text-primary mb-2">
+                                                        <v-icon size="small" class="mr-1">mdi-link-variant</v-icon>
+                                                        Correspondance des sous-dossiers
                                                     </div>
-                                                </template>
-                                            </v-select>
-                                            <v-btn v-if="filterMoisId" variant="text" color="error" size="small"
-                                                @click="resetFilter" prepend-icon="mdi-filter-off">
-                                                Réinitialiser
-                                            </v-btn>
-                                            <v-spacer></v-spacer>
-                                            <v-chip color="info" size="small">{{ availableDossiersCount }} cibles</v-chip>
+                                                    <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+                                                        Laissez vide pour <strong>ignorer</strong> l'importation de ce dossier.
+                                                    </v-alert>
+                                                    
+                                                    <v-row v-for="mFolder in uniqueMonthFolders" :key="mFolder" align="center" class="mb-1">
+                                                        <v-col cols="5" class="py-1">
+                                                            <div class="text-body-2 text-truncate" :title="mFolder || 'Racine'">
+                                                                <v-icon size="small" color="grey-darken-1" class="mr-1">mdi-folder</v-icon>
+                                                                {{ mFolder || 'Aucun dossier parent' }}
+                                                            </div>
+                                                        </v-col>
+                                                        <v-col cols="7" class="py-1">
+                                                            <v-select
+                                                                v-model="monthMappings[mFolder]"
+                                                                :items="moisOfSelectedAnnee"
+                                                                item-title="label"
+                                                                item-value="id"
+                                                                density="compact"
+                                                                variant="outlined"
+                                                                hide-details
+                                                                placeholder="Choisir le mois..."
+                                                            ></v-select>
+                                                        </v-col>
+                                                    </v-row>
+                                                </div>
+                                            </div>
+                                            
+                                            <div style="flex: 2;">
+                                                <v-alert type="info" variant="tonal" class="mb-0" density="compact">
+                                                    Les dossiers détectés seront <strong>créés automatiquement</strong> dans le mois sélectionné s'ils n'existent pas. Les doublons seront ignorés.
+                                                </v-alert>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <v-row v-for="folder in folders" :key="folder" align="center" class="mb-2">
-                                        <v-col cols="12" md="5">
-                                            <v-card variant="outlined" class="pa-3" :class="folderMapping[folder] ? 'bg-green-lighten-5' : 'bg-grey-lighten-5'">
-                                                <div class="d-flex align-center">
-                                                    <v-icon :color="folderMapping[folder] ? 'success' : 'amber-darken-2'" size="28" class="mr-3">mdi-folder</v-icon>
-                                                    <div>
-                                                        <div class="font-weight-bold">{{ folder }}</div>
-                                                        <div class="text-caption text-grey">
-                                                            {{ countFilesByFolder(folder) }} fichier(s) — {{ countSelectedByFolder(folder) }} sélectionné(s)
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </v-card>
-                                        </v-col>
-                                        <v-col cols="12" md="1" class="text-center">
-                                            <v-icon :color="folderMapping[folder] ? 'success' : 'grey'" size="28">mdi-arrow-right</v-icon>
-                                        </v-col>
-                                        <v-col cols="12" md="6">
-                                            <v-autocomplete v-model="folderMapping[folder]" :items="filteredDossiers"
-                                                item-title="chemin" item-value="id" label="Dossier cible (optionnel)"
-                                                variant="outlined" density="comfortable" prepend-inner-icon="mdi-folder-arrow-right" clearable
-                                                :placeholder="`Laisser vide pour ignorer '${folder}'`">
-                                                <template v-slot:item="{ item, props: itemProps }">
-                                                    <v-list-item v-bind="itemProps">
-                                                        <template v-slot:prepend><v-icon :color="item.raw.couleur">mdi-folder</v-icon></template>
-                                                        <v-list-item-subtitle>{{ item.raw.chemin }}</v-list-item-subtitle>
-                                                    </v-list-item>
-                                                </template>
-                                                <template v-slot:selection="{ item }">
-                                                    <div class="d-flex align-center">
-                                                        <v-icon :color="item.raw.couleur" size="18" class="mr-2">mdi-folder</v-icon>
-                                                        <span class="text-truncate">{{ item.raw.chemin }}</span>
-                                                    </div>
-                                                </template>
-                                            </v-autocomplete>
-                                        </v-col>
-                                    </v-row>
-
                                     <v-btn color="success" size="large" block class="mt-4" @click="importFiles" :loading="isLoading" :disabled="!canImportAction">
                                         <v-icon start>mdi-cloud-upload</v-icon>
-                                        Importer {{ selectedCount }} fichier(s) vers {{ mappedCount }} dossier(s) cible(s)
+                                        Importer {{ selectedCount }} fichier(s) vers le mois sélectionné
                                     </v-btn>
                                 </v-col>
                             </v-row>
@@ -602,17 +758,12 @@ const availableDossiersCount = computed(() => filteredDossiers.value.length);
                                     </div>
 
                                     <div v-for="folder in folders" :key="folder" class="mb-3">
-                                        <div class="d-flex align-center justify-space-between pa-3 rounded-lg mb-1"
-                                            :class="folderMapping[folder] ? 'bg-green-lighten-5' : 'bg-grey-lighten-4'"
+                                        <div class="d-flex align-center justify-space-between pa-3 rounded-lg mb-1 bg-grey-lighten-4"
                                             @click="toggleFolder(folder)" style="cursor: pointer;">
                                             <div class="d-flex align-center gap-2">
                                                 <v-icon color="amber-darken-2">mdi-folder</v-icon>
                                                 <span class="font-weight-medium">{{ folder }}</span>
                                                 <v-chip size="x-small" color="grey">{{ countFilesByFolder(folder) }} fichiers</v-chip>
-                                                <v-icon v-if="folderMapping[folder]" color="success" size="18">mdi-check-circle</v-icon>
-                                                <span v-if="folderMapping[folder]" class="text-caption text-success">
-                                                    → {{ getDossierById(folderMapping[folder])?.chemin || '?' }}
-                                                </span>
                                             </div>
                                             <div class="d-flex align-center">
                                                 <v-btn size="x-small" variant="text" @click.stop="toggleFolderFiles(folder, true)">Select</v-btn>

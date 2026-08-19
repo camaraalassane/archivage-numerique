@@ -36,4 +36,15 @@ class Dossier extends Model
     {
         return "{$this->mois->annee->annee}/{$this->mois->nom_mois}/{$this->nom}";
     }
+
+    protected static function booted()
+    {
+        static::saved(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+        });
+
+        static::deleted(function ($model) {
+            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
+        });
+    }
 }
