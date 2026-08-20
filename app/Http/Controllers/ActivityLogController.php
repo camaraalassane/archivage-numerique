@@ -23,4 +23,15 @@ class ActivityLogController extends Controller
             'logs' => $logs
         ]);
     }
+
+    public function clear()
+    {
+        if (!auth()->user()->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour supprimer le journal des événements.');
+        }
+
+        ActivityLog::truncate();
+
+        return redirect()->back()->with('success', 'Le journal des événements a été vidé avec succès.');
+    }
 }

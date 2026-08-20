@@ -93,6 +93,7 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ADMIN])
     ->group(function () {
         // --- GESTION DES UTILISATEURS ---
         Route::resource('users', UserController::class)->except(['show', 'create']);
+        Route::delete('/activity-logs/clear', [ActivityLogController::class, 'clear'])->name('activity-logs.clear');
         Route::get('/activity-logs', [ActivityLogController::class, 'index'])->name('activity-logs.index');
 
         // --- GESTION DES ANNÉES ---

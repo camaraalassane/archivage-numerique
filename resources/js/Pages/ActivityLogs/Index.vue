@@ -1,11 +1,22 @@
 <!-- resources/js/Pages/ActivityLogs/Index.vue -->
 <script setup>
 import { Head, router } from '@inertiajs/vue3';
+import { ref } from 'vue';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 
 const props = defineProps({
     logs: { type: Object, required: true },
 });
+
+const showClearDialog = ref(false);
+
+const clearLogs = () => {
+    router.delete(route('activity-logs.clear'), {
+        onSuccess: () => {
+            showClearDialog.value = false;
+        }
+    });
+};
 
 const formatDate = (dateString) => {
     if (!dateString) return '';
@@ -82,6 +93,15 @@ const getRoleName = (roleId) => {
                     </div>
                 </div>
                 <v-spacer></v-spacer>
+                <v-btn
+                    color="error"
+                    variant="flat"
+                    prepend-icon="mdi-delete-sweep"
+                    @click="showClearDialog = true"
+                    v-if="$page.props.auth.user.role === 3"
+                >
+                    Vider le journal
+                </v-btn>
             </v-toolbar>
 
             <v-table hover density="comfortable">
@@ -137,6 +157,26 @@ const getRoleName = (roleId) => {
             </div>
         </v-card>
     </AuthenticatedLayout>
+
+    <!-- Dialog Confirmation Vider -->
+    <v-dialog v-model="showClearDialog" max-width="500">
+        <v-card class="rounded-xl">
+            <v-card-title class="bg-error text-white pa-4">
+                <v-icon icon="mdi-alert" class="mr-2"></v-icon>
+                Confirmation de suppression
+            </v-card-title>
+            <v-card-text class="pa-4 pt-6">
+                Êtes-vous sûr de vouloir vider <strong>entièrement</strong> le journal des événements ?
+                <br><br>
+                Cette action est irréversible et supprimera l'historique de toutes les actions effectuées sur l'application.
+            </v-card-text>
+            <v-card-actions class="pa-4 pt-0">
+                <v-spacer></v-spacer>
+                <v-btn color="grey-darken-1" variant="text" @click="showClearDialog = false">Annuler</v-btn>
+                <v-btn color="error" variant="flat" @click="clearLogs">Oui, vider le journal</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 </template>
 
 <style scoped>
