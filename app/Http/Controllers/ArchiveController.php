@@ -31,15 +31,11 @@ class ArchiveController extends Controller
         }
 
         $query->when($request->search, function ($q, $search) {
-            // Remplacer les espaces par % pour permettre une recherche plus souple
-            // ex: "ARRETE 2021 5995" matchera "ARRETE_2021-5995"
             $flexibleSearch = '%' . preg_replace('/\s+/', '%', trim($search)) . '%';
-            
             $q->where(function ($sub) use ($flexibleSearch, $search) {
                 $sub->where('titre', 'like', $flexibleSearch)
                     ->orWhere('reference', 'like', $flexibleSearch)
                     ->orWhere('mots_cles', 'like', $flexibleSearch)
-                    // On garde aussi la recherche stricte au cas où
                     ->orWhere('titre', 'like', "%{$search}%")
                     ->orWhere('reference', 'like', "%{$search}%");
             });
@@ -393,7 +389,7 @@ class ArchiveController extends Controller
                             'navigateur' => $request->header('User-Agent')
                         ]
                     ]);
-                    
+
                     ActivityLog::log('archive_created', "A archivé le document {$archive->reference} : {$archive->titre}");
 
                     $imported++;
@@ -459,7 +455,7 @@ class ArchiveController extends Controller
             }
 
             $archive->update($validated);
-            
+
             ActivityLog::log('archive_updated', "A modifié le document {$archive->reference} : {$archive->titre}");
 
             return redirect()->back()->with('success', 'Document mis à jour avec succès');
@@ -472,21 +468,36 @@ class ArchiveController extends Controller
 
     public function download(Archive $archive): StreamedResponse
     {
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
+        $path = Storage::disk('archives')->path($archive->fichier_path);
+        $stream = @fopen($path, 'r');
+        
+        if (!$stream) {
             abort(404, 'Le fichier physique est introuvable.');
         }
-        return Storage::disk('archives')->download(
-            $archive->fichier_path,
-            $archive->fichier_nom_original
-        );
+        
+        return response()->stream(function () use ($stream) {
+            fpassthru($stream);
+        }, 200, [
+            'Content-Type' => $archive->mime_type ?? 'application/octet-stream',
+            'Content-Disposition' => 'attachment; filename="' . $archive->fichier_nom_original . '"'
+        ]);
     }
 
     public function viewFile(Archive $archive)
     {
-        if (!Storage::disk('archives')->exists($archive->fichier_path)) {
-            abort(404);
+        $path = Storage::disk('archives')->path($archive->fichier_path);
+        $stream = @fopen($path, 'r');
+        
+        if (!$stream) {
+            abort(404, 'Le fichier physique est introuvable.');
         }
-        return response()->file(Storage::disk('archives')->path($archive->fichier_path));
+
+        return response()->stream(function () use ($stream) {
+            fpassthru($stream);
+        }, 200, [
+            'Content-Type' => $archive->mime_type ?? 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . $archive->fichier_nom_original . '"'
+        ]);
     }
 
     public function destroy(Archive $archive)
@@ -501,12 +512,12 @@ class ArchiveController extends Controller
             if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
                 Storage::disk('archives')->delete($archive->fichier_path);
             }
-            
+
             $reference = $archive->reference;
             $titre = $archive->titre;
 
             $archive->delete();
-            
+
             ActivityLog::log('archive_deleted', "A supprimé le document {$reference} : {$titre}");
 
             return redirect()->back()->with('success', 'Archive supprimée avec succès.');
