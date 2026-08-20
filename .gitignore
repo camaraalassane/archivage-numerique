@@ -35,3 +35,4 @@ archive/
 *.sqlite3
 public/archives/
 database/*.sqlite
+*.sql
