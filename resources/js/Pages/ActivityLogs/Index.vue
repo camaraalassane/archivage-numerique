@@ -98,7 +98,7 @@ const getRoleName = (roleId) => {
                     variant="flat"
                     prepend-icon="mdi-delete-sweep"
                     @click="showClearDialog = true"
-                    v-if="$page.props.auth.user.role === 3"
+                    v-if="$page.props.auth.user.role == 3"
                 >
                     Vider le journal
                 </v-btn>
