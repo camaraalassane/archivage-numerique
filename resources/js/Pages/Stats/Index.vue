@@ -224,28 +224,83 @@ const moveArchive = () => {
 };
 
 // Validation
+const rejectDialog = ref(false);
+const rejectReason = ref('');
+const archiveToReject = ref(null);
+
+const openRejectDialog = (archive) => {
+    archiveToReject.value = archive;
+    rejectReason.value = '';
+    rejectDialog.value = true;
+};
+
+const confirmReject = () => {
+    if (!rejectReason.value.trim()) {
+        showNotify('Veuillez indiquer un motif.', 'error');
+        return;
+    }
+    router.post(route('archives.validate', archiveToReject.value.id), {
+        status: 'rejected',
+        comment: rejectReason.value
+    }, {
+        onSuccess: () => {
+            rejectDialog.value = false;
+            archiveToReject.value = null;
+            rejectReason.value = '';
+            router.reload({ only: ['stats'] });
+            showNotify('Document rejeté avec succès', 'success');
+        },
+        onError: (errors) => {
+            console.error('Erreur lors du rejet:', errors);
+            showNotify('Erreur lors du rejet du document.', 'error');
+        }
+    });
+};
+
+const validateDialog = ref(false);
+const validateReason = ref('');
+const archiveToValidate = ref(null);
+
+const openValidateDialog = (archive) => {
+    archiveToValidate.value = archive;
+    validateReason.value = 'Validé par le gestionnaire';
+    validateDialog.value = true;
+};
+
+const confirmValidate = () => {
+    router.post(route('archives.validate', archiveToValidate.value.id), {
+        status: 'validated',
+        comment: validateReason.value || 'Validé par le gestionnaire'
+    }, {
+        onSuccess: () => {
+            validateDialog.value = false;
+            archiveToValidate.value = null;
+            validateReason.value = '';
+            router.reload({ only: ['stats'] });
+            showNotify('Document validé avec succès', 'success');
+        },
+        onError: (errors) => {
+            console.error('Erreur lors de la validation:', errors);
+            showNotify('Erreur lors de la validation du document.', 'error');
+        }
+    });
+};
+
 const validateArchive = (archive, status) => {
     if (!canValidate.value) {
         showNotify('Vous n\'avez pas les droits pour valider des documents.', 'error');
         return;
     }
 
-    const statusLabel = status === 'validated' ? 'valider' : 'rejeter';
-    showConfirm(`Voulez-vous ${statusLabel} ce document ?`, () => {
-        router.post(route('archives.validate', archive.id), {
-            status: status,
-            comment: `Document ${statusLabel} via les statistiques`
-        }, {
-            onSuccess: () => {
-                router.reload({ only: ['stats'] });
-                showNotify(`Document ${statusLabel} avec succès`, 'success');
-            },
-            onError: (errors) => {
-                console.error('Erreur lors de la validation:', errors);
-                showNotify('Erreur lors de la validation du document.', 'error');
-            }
-        });
-    }, `${statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1)} le document`);
+    if (status === 'rejected') {
+        openRejectDialog(archive);
+        return;
+    }
+
+    if (status === 'validated') {
+        openValidateDialog(archive);
+        return;
+    }
 };
 
 // Suppression
@@ -286,6 +341,52 @@ const downloadFile = (archive) => {
                 <v-btn variant="text" @click="snackbar.show = false">Fermer</v-btn>
             </template>
         </v-snackbar>
+
+        <!-- DIALOGUE REJET -->
+        <v-dialog v-model="rejectDialog" max-width="450px" persistent>
+            <v-card class="rounded-xl">
+                <v-toolbar color="error" dark>
+                    <v-icon start>mdi-close-circle</v-icon>
+                    <v-toolbar-title>Rejeter l'archive</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="rejectDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <v-card-text class="pa-4">
+                    <p class="mb-2 text-body-2 font-weight-medium">{{ archiveToReject?.titre }}</p>
+                    <v-textarea v-model="rejectReason" label="Motif du rejet" rows="2" density="compact" required></v-textarea>
+                </v-card-text>
+                <v-divider></v-divider>
+                <v-card-actions class="pa-4 bg-grey-lighten-5">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" @click="rejectDialog = false" rounded="lg">Annuler</v-btn>
+                    <v-btn color="error" variant="flat" @click="confirmReject" rounded="lg" class="px-6">Rejeter</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- DIALOGUE VALIDATION -->
+        <v-dialog v-model="validateDialog" max-width="450px" persistent>
+            <v-card class="rounded-xl">
+                <v-toolbar color="success" dark>
+                    <v-icon start>mdi-check-circle</v-icon>
+                    <v-toolbar-title>Valider l'archive</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="validateDialog = false"></v-btn>
+                </v-toolbar>
+                <v-divider></v-divider>
+                <v-card-text class="pa-4">
+                    <p class="mb-2 text-body-2 font-weight-medium">{{ archiveToValidate?.titre }}</p>
+                    <v-textarea v-model="validateReason" label="Motif de validation (Optionnel)" rows="2" density="compact"></v-textarea>
+                </v-card-text>
+                <v-divider></v-divider>
+                <v-card-actions class="pa-4 bg-grey-lighten-5">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" @click="validateDialog = false" rounded="lg">Annuler</v-btn>
+                    <v-btn color="success" variant="flat" @click="confirmValidate" rounded="lg" class="px-6">Valider</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
 
         <!-- DIALOGUE DE CONFIRMATION -->
         <v-dialog v-model="confirmDialog" max-width="450px" persistent>

@@ -84,6 +84,7 @@ class ArchivisteController extends Controller
             'date_document' => 'required|date',
             'description' => 'nullable|string',
             'mots_cles' => 'nullable|string|max:255',
+            'fichier' => 'nullable|file|mimes:pdf,jpg,jpeg,png,docx|max:10240', // 10MB
         ]);
 
         $dossier = Dossier::with(['mois.annee'])->find($request->dossier_id);
@@ -91,11 +92,59 @@ class ArchivisteController extends Controller
             return redirect()->back()->with('error', 'Impossible : cette année est clôturée.');
         }
 
-        $archive->update($request->only([
+        $data = $request->only([
             'titre', 'reference', 'dossier_id', 'date_document', 'description', 'mots_cles'
-        ]));
+        ]);
+
+        if ($request->hasFile('fichier')) {
+            $file = $request->file('fichier');
+            
+            // Delete old file
+            if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
+                Storage::disk('archives')->delete($archive->fichier_path);
+            }
+
+            // Store new file
+            $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
+            $path = $file->store($chemin, 'archives');
+
+            $data['fichier_path'] = $path;
+            $data['fichier_nom_original'] = $file->getClientOriginalName();
+            $data['fichier_taille'] = $file->getSize();
+            $data['mime_type'] = $file->getMimeType();
+            $data['type_document'] = $file->getClientOriginalExtension();
+        }
+
+        $archive->update($data);
 
         return redirect()->back()->with('success', 'Archive mise à jour avec succès.');
+    }
+
+    /**
+     * Resoumettre une archive rejetée pour validation
+     */
+    public function resubmit(Archive $archive)
+    {
+        $user = Auth::user();
+
+        if (!$user->isArchiviste() || $archive->created_by !== $user->id) {
+            abort(403, 'Vous n\'avez pas les droits pour resoumettre cette archive.');
+        }
+
+        if (!$archive->isRejected()) {
+            return redirect()->back()->with('error', 'Seules les archives rejetées peuvent être resoumises.');
+        }
+
+        $archive->update([
+            'validation_status' => Archive::STATUS_PENDING,
+            'validation_comment' => null,
+            'validated_by' => null,
+            'validated_at' => null
+        ]);
+
+        \App\Models\ActivityLog::log('archive_resubmitted', "A resoumis l'archive rejetée {$archive->reference} pour validation.");
+
+        return redirect()->back()->with('success', 'Archive resoumise pour validation avec succès.');
     }
 
     /**

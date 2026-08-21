@@ -121,12 +121,11 @@ Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE])
     ->group(function () {
         Route::get('/archiviste/pending-rejected', [ArchivisteController::class, 'pendingRejected'])
             ->name('archiviste.pending-rejected');
-        Route::put('/archiviste/{archive}', [ArchivisteController::class, 'update'])
-            ->name('archiviste.update');
-        Route::delete('/archiviste/{archive}', [ArchivisteController::class, 'destroy'])
-            ->name('archiviste.destroy');
-        Route::get('/archiviste/{archive}/download', [ArchivisteController::class, 'download'])
-            ->name('archiviste.download');
+        Route::put('/archiviste/archives/{archive}', [ArchivisteController::class, 'update'])->name('archiviste.update');
+        Route::delete('/archiviste/archives/{archive}', [ArchivisteController::class, 'destroy'])->name('archiviste.destroy');
+        Route::post('/archiviste/archives/{archive}/resubmit', [ArchivisteController::class, 'resubmit'])->name('archiviste.resubmit');
+        
+        Route::get('/archiviste/archives/{archive}/download', [ArchivisteController::class, 'download'])->name('archiviste.download');
         Route::get('/archiviste/{archive}/view', [ArchivisteController::class, 'viewFile'])
             ->name('archiviste.view');
     });

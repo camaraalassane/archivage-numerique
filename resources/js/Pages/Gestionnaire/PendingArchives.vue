@@ -94,19 +94,24 @@ const previewFile = (archive) => {
     previewDialog.value = true;
 };
 
-// Validation
-const validateArchive = (archive) => {
-    showConfirm('Voulez-vous valider cette archive ?', () => {
-        router.post(route('gestionnaire.validate', archive.id), {
-            comment: 'Validé par le gestionnaire'
-        }, {
-            onSuccess: () => {
-                showNotification('✅ Archive validée');
-                router.reload({ only: ['pendingArchives'] });
-            },
-            onError: () => showNotification('❌ Erreur lors de la validation', 'error'),
-        });
-    }, 'Valider l\'archive');
+// Validation individuelle
+const openValidateDialog = (archive) => {
+    currentArchive.value = archive;
+    validateReason.value = 'Validé par le gestionnaire';
+    validateDialog.value = true;
+};
+
+const confirmValidate = () => {
+    router.post(route('gestionnaire.validate', currentArchive.value.id), {
+        comment: validateReason.value || 'Validé par le gestionnaire'
+    }, {
+        onSuccess: () => {
+            validateDialog.value = false;
+            showNotification('✅ Archive validée');
+            router.reload({ only: ['pendingArchives'] });
+        },
+        onError: () => showNotification('❌ Erreur lors de la validation', 'error'),
+    });
 };
 
 // Rejet
@@ -284,25 +289,44 @@ const getDossierPath = (archive) => {
             </v-card>
         </v-dialog>
 
-        <!-- Dialogue Rejet individuel -->
-        <v-dialog v-model="rejectDialog" max-width="450px">
-            <v-card class="rounded-xl">
-                <v-toolbar color="error" dark class="rounded-t-xl">
-                    <v-icon start>mdi-close-circle</v-icon>
-                    <v-toolbar-title>Rejeter l'archive</v-toolbar-title>
+        <!-- DIALOGUE REJET -->
+        <v-dialog v-model="rejectDialog" max-width="400px" persistent>
+            <v-card class="rounded-lg">
+                <v-toolbar color="error" dark density="compact">
+                    <v-icon start size="small">mdi-close-circle</v-icon>
+                    <v-toolbar-title class="text-subtitle-1">Rejeter l'archive</v-toolbar-title>
                     <v-spacer></v-spacer>
-                    <v-btn icon="mdi-close" variant="text" @click="rejectDialog = false"></v-btn>
+                    <v-btn icon="mdi-close" variant="text" size="small" @click="rejectDialog = false"></v-btn>
                 </v-toolbar>
-                <v-divider></v-divider>
                 <v-card-text class="pa-4">
                     <p class="mb-2 text-body-2 font-weight-medium">{{ currentArchive?.titre }}</p>
                     <v-textarea v-model="rejectReason" label="Motif du rejet" rows="2" density="compact" required></v-textarea>
                 </v-card-text>
-                <v-divider></v-divider>
-                <v-card-actions class="pa-3">
+                <v-card-actions class="pa-2 bg-grey-lighten-4">
                     <v-spacer></v-spacer>
-                    <v-btn variant="text" @click="rejectDialog = false">Annuler</v-btn>
-                    <v-btn color="error" @click="confirmReject">Rejeter</v-btn>
+                    <v-btn variant="text" size="small" @click="rejectDialog = false">Annuler</v-btn>
+                    <v-btn color="error" variant="flat" size="small" @click="confirmReject">Rejeter</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
+
+        <!-- DIALOGUE VALIDATION -->
+        <v-dialog v-model="validateDialog" max-width="400px" persistent>
+            <v-card class="rounded-lg">
+                <v-toolbar color="success" dark density="compact">
+                    <v-icon start size="small">mdi-check-circle</v-icon>
+                    <v-toolbar-title class="text-subtitle-1">Valider l'archive</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" size="small" @click="validateDialog = false"></v-btn>
+                </v-toolbar>
+                <v-card-text class="pa-4">
+                    <p class="mb-2 text-body-2 font-weight-medium">{{ currentArchive?.titre }}</p>
+                    <v-textarea v-model="validateReason" label="Motif de validation (Optionnel)" rows="2" density="compact"></v-textarea>
+                </v-card-text>
+                <v-card-actions class="pa-2 bg-grey-lighten-4">
+                    <v-spacer></v-spacer>
+                    <v-btn variant="text" size="small" @click="validateDialog = false">Annuler</v-btn>
+                    <v-btn color="success" variant="flat" size="small" @click="confirmValidate">Valider</v-btn>
                 </v-card-actions>
             </v-card>
         </v-dialog>
@@ -418,6 +442,10 @@ const getDossierPath = (archive) => {
                                                 </td>
                                                 <td style="padding: 1px 6px; max-width: 200px;">
                                                     <span class="text-truncate text-caption d-block">{{ archive.titre }}</span>
+                                                    <div v-if="archive.validation_status === 'rejected'" class="text-error" style="font-size: 0.65rem; line-height: 1.1; margin-top: 2px;">
+                                                        <v-icon size="x-small" color="error">mdi-close-circle</v-icon> Rejeté 
+                                                        <span v-if="archive.validation_comment">- {{ archive.validation_comment }}</span>
+                                                    </div>
                                                 </td>
                                                 <td class="text-center" style="padding: 1px 6px;">
                                                     <v-icon :color="getFileColor(archive.type_document)" size="x-small">
@@ -431,7 +459,7 @@ const getDossierPath = (archive) => {
                                                         <!-- ⬇️ Téléchargement -->
                                                         <v-btn icon="mdi-download" size="x-small" variant="text" color="primary" :href="route('gestionnaire.download', archive.id)" title="Télécharger"></v-btn>
                                                         <!-- ✅ Valider -->
-                                                        <v-btn icon="mdi-check" size="x-small" variant="flat" color="success" @click="validateArchive(archive)" title="Valider"></v-btn>
+                                                        <v-btn icon="mdi-check" size="x-small" variant="flat" color="success" @click="openValidateDialog(archive)" title="Valider"></v-btn>
                                                         <!-- ❌ Rejeter -->
                                                         <v-btn icon="mdi-close" size="x-small" variant="flat" color="error" @click="openRejectDialog(archive)" title="Rejeter"></v-btn>
                                                         <!-- 🗑️ Supprimer -->

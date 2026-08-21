@@ -65,6 +65,7 @@ const editForm = useForm({
     date_document: '',
     description: '',
     mots_cles: '',
+    fichier: null,
 });
 
 const openEditDialog = (archive) => {
@@ -75,12 +76,16 @@ const openEditDialog = (archive) => {
     editForm.date_document = archive.date_document;
     editForm.description = archive.description || '';
     editForm.mots_cles = archive.mots_cles || '';
+    editForm.fichier = null;
     editForm.clearErrors();
     editDialog.value = true;
 };
 
 const updateArchive = () => {
-    editForm.put(route('archiviste.update', editingArchive.value.id), {
+    editForm.transform((data) => ({
+        ...data,
+        _method: 'put',
+    })).post(route('archiviste.update', editingArchive.value.id), {
         onSuccess: () => {
             editDialog.value = false;
             editingArchive.value = null;
@@ -104,6 +109,19 @@ const deleteArchive = (id) => {
             }
         });
     }, 'Supprimer l\'archive');
+};
+
+const resubmitArchive = (id) => {
+    showConfirm('Voulez-vous resoumettre cette archive pour validation ?', () => {
+        router.post(route('archiviste.resubmit', id), {}, {
+            onSuccess: () => {
+                showNotify('Archive resoumise avec succès', 'success');
+            },
+            onError: () => {
+                showNotify('Erreur lors de la resoumission', 'error');
+            }
+        });
+    }, 'Resoumettre l\'archive');
 };
 
 // Filtrage
@@ -255,8 +273,15 @@ const getFileIcon = (type) => {
                                 }}</v-icon>
                                 {{ getStatusInfo(archive.validation_status).label }}
                             </v-chip>
+                            <div v-if="archive.validation_status === 'rejected' && archive.validation_comment" 
+                                class="text-caption text-error mt-1" 
+                                style="max-width: 200px; white-space: normal; line-height: 1.2;">
+                                <strong>Motif :</strong> {{ archive.validation_comment }}
+                            </div>
                         </td>
                         <td class="text-center">
+                            <v-btn v-if="archive.validation_status === 'rejected'" icon="mdi-refresh" size="small" variant="text" color="success"
+                                @click="resubmitArchive(archive.id)" title="Resoumettre pour validation"></v-btn>
                             <v-btn icon="mdi-pencil" size="small" variant="text" color="primary"
                                 @click="openEditDialog(archive)" title="Modifier"></v-btn>
                             <v-btn icon="mdi-delete" size="small" variant="text" color="error"
@@ -326,8 +351,14 @@ const getFileIcon = (type) => {
                             variant="outlined" density="comfortable" :error-messages="editForm.errors.date_document"
                             required></v-text-field>
 
+                        <v-file-input v-model="editForm.fichier" label="Remplacer le fichier (Optionnel)"
+                            variant="outlined" density="comfortable" prepend-inner-icon="mdi-paperclip"
+                            prepend-icon="" show-size accept=".pdf,.jpg,.jpeg,.png,.docx"
+                            :error-messages="editForm.errors.fichier"
+                            hint="Laissez vide pour conserver l'ancien fichier" persistent-hint></v-file-input>
+
                         <v-textarea v-model="editForm.description" label="Description" variant="outlined"
-                            density="comfortable" rows="3"></v-textarea>
+                            density="comfortable" rows="3" class="mt-2"></v-textarea>
 
                         <v-text-field v-model="editForm.mots_cles" label="Mots-clés" variant="outlined"
                             density="comfortable" hint="Séparés par des virgules" persistent-hint></v-text-field>
