@@ -23,11 +23,20 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'peut_archiver_confidentiel',
+        'peut_valider_confidentiel',
+        'peut_consulter_confidentiel',
+        'mot_de_passe_confidentiel',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
+        'mot_de_passe_confidentiel',
+    ];
+
+    protected $appends = [
+        'has_confidential_password'
     ];
 
     protected function casts(): array
@@ -36,6 +45,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => 'integer',
+            'peut_archiver_confidentiel' => 'boolean',
+            'peut_valider_confidentiel' => 'boolean',
+            'peut_consulter_confidentiel' => 'boolean',
         ];
     }
 
@@ -159,6 +171,32 @@ class User extends Authenticatable
         }
 
         return false;
+    }
+
+    // === CONFIDENTIALITÉ ===
+    public function canArchiveConfidential(): bool
+    {
+        return $this->peut_archiver_confidentiel == 1;
+    }
+
+    public function canValidateConfidential(): bool
+    {
+        return $this->peut_valider_confidentiel == 1;
+    }
+
+    public function canViewConfidential(): bool
+    {
+        return $this->peut_consulter_confidentiel == 1 || $this->canValidateConfidential() || $this->isAdmin();
+    }
+
+    public function hasConfidentialPasswordSetup(): bool
+    {
+        return !empty($this->mot_de_passe_confidentiel);
+    }
+
+    public function getHasConfidentialPasswordAttribute(): bool
+    {
+        return !empty($this->mot_de_passe_confidentiel);
     }
 
     // === ACCESSEURS ===

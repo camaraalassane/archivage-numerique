@@ -16,8 +16,11 @@ const props = defineProps({
     permissions: { type: Object, default: () => ({}) }
 });
 
+import { usePage } from '@inertiajs/vue3';
+
 // === PERMISSIONS ===
-const userRole = computed(() => window.$page?.props?.auth?.user?.role ?? 1);
+const page = usePage();
+const userRole = computed(() => page.props.auth.user.role ?? 1);
 const isArchiviste = computed(() => userRole.value === 1);
 const isGestionnaire = computed(() => userRole.value === 2);
 const isAdmin = computed(() => userRole.value === 3);
@@ -113,6 +116,7 @@ const duplicateWarning = ref(false);
 const duplicateFiles = ref([]);
 
 // Filtres
+const currentTab = ref(props.filters?.tab || 'ordinaire');
 const search = ref(props.filters?.search || '');
 const filterDossier = ref(props.filters?.dossier_id || null);
 const filterType = ref(props.filters?.type || null);
@@ -136,6 +140,7 @@ const form = useForm({
     mots_cles: '',
     fichier: null,
     fichiers: [],
+    type_document_confidentiel: 2,
 });
 
 // Génération de référence
@@ -194,6 +199,7 @@ watch([selectedAnneeId, selectedMoisId, () => form.dossier_id], () => {
 // Recherche avec debounce
 const updateSearch = debounce(() => {
     router.get(route('archives.index'), {
+        tab: currentTab.value,
         search: search.value,
         dossier_id: filterDossier.value,
         type: filterType.value,
@@ -206,7 +212,7 @@ const updateSearch = debounce(() => {
     });
 }, 400);
 
-watch([search, filterDossier, filterType, filterDateDebut, filterDateFin], () => {
+watch([currentTab, search, filterDossier, filterType, filterDateDebut, filterDateFin], () => {
     updateSearch();
 });
 
@@ -224,6 +230,7 @@ const exportExcel = () => {
         return;
     }
     const params = new URLSearchParams({
+        tab: currentTab.value || 'ordinaire',
         search: search.value || '',
         dossier_id: filterDossier.value || '',
         date_debut: filterDateDebut.value || '',
@@ -299,6 +306,7 @@ const openCreateDialog = () => {
     form.reference = '';
     form.fichier = null;
     form.fichiers = [];
+    form.type_document_confidentiel = 2;
     form.date_document = new Date().toISOString().substr(0, 10);
     dialog.value = true;
 };
@@ -322,6 +330,7 @@ const openEditDialog = (archive) => {
     form.date_document = archive.date_document;
     form.description = archive.description || '';
     form.mots_cles = archive.mots_cles || '';
+    form.type_document_confidentiel = archive.type_document_confidentiel || 2;
     form.clearErrors();
 
     const dossier = props.dossiers.find(d => d.id === archive.dossier_id);
@@ -441,6 +450,7 @@ const submit = async () => {
         formData.append('date_document', form.date_document);
         formData.append('description', form.description || '');
         formData.append('mots_cles', form.mots_cles || '');
+        formData.append('type_document_confidentiel', form.type_document_confidentiel || 2);
 
         const baseRef = generateReference();
 
@@ -549,7 +559,7 @@ const getDossierPath = (archive) => {
     return `${archive.dossier.mois?.annee?.annee || ''} / ${archive.dossier.mois?.nom_mois || ''} / ${archive.dossier.nom}`;
 };
 
-const noDataMessage = isArchiviste.value ? 'Aucun document archivé par vos soins.' : 'Aucun document ne correspond à vos critères.';
+const noDataMessage = 'Aucun document ne correspond à vos critères.';
 
 const formatDate = (date) => {
     if (!date) return '-';
@@ -629,6 +639,18 @@ const formatSize = (bytes) => {
                     </div>
                 </div>
                 <v-spacer></v-spacer>
+
+                <!-- Toggle Ordinaire / Confidentiel -->
+                <v-btn-toggle v-model="currentTab" mandatory density="compact" class="mx-4 bg-white" color="primary" rounded="lg">
+                    <v-btn value="ordinaire" size="small">
+                        Ordinaire
+                    </v-btn>
+                    <v-btn value="confidentiel" size="small" v-if="userRole === 3 || $page.props.auth.user.peut_valider_confidentiel || $page.props.auth.user.peut_archiver_confidentiel || $page.props.auth.user.peut_consulter_confidentiel">
+                        <v-icon start size="small" color="error">mdi-shield-lock</v-icon>
+                        Confidentiel
+                    </v-btn>
+                </v-btn-toggle>
+
                 <v-text-field v-model="search" prepend-inner-icon="mdi-magnify" placeholder="Rechercher..."
                     variant="outlined" hide-details density="comfortable" class="mx-4"
                     style="max-width: 350px;"></v-text-field>
@@ -917,6 +939,27 @@ const formatSize = (bytes) => {
                                     <template v-slot:prepend-inner><v-icon color="primary"
                                             size="small">mdi-tag-multiple</v-icon></template>
                                 </v-text-field>
+                            </v-col>
+
+                            <v-col cols="12" v-if="userRole === 3 || $page.props.auth.user.peut_archiver_confidentiel">
+                                <v-card variant="outlined" class="pa-3 bg-grey-lighten-5">
+                                    <div class="d-flex align-center">
+                                        <v-icon color="error" class="mr-3">mdi-shield-lock</v-icon>
+                                        <div>
+                                            <div class="font-weight-bold">Document Confidentiel</div>
+                                            <div class="text-caption text-grey">Restreindre l'accès à ce document</div>
+                                        </div>
+                                        <v-spacer></v-spacer>
+                                        <v-switch
+                                            v-model="form.type_document_confidentiel"
+                                            color="error"
+                                            :true-value="1"
+                                            :false-value="2"
+                                            hide-details
+                                            density="compact"
+                                        ></v-switch>
+                                    </div>
+                                </v-card>
                             </v-col>
 
                             <v-col cols="12" v-if="!isEditing && !multipleMode">

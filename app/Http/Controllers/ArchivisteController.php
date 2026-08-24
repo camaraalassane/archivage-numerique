@@ -12,9 +12,17 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Illuminate\Support\Facades\Cache;
 
 class ArchivisteController extends Controller
 {
+    private function invalidateCaches(): void
+    {
+        Cache::forget('dashboard_tree_data');
+        Cache::forget('stats_global');
+        Cache::forget('distinct_archive_types');
+    }
+
     /**
      * Affiche les archives en attente et rejetées pour l'Archiviste
      */
@@ -27,7 +35,13 @@ class ArchivisteController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour accéder à cette page.');
         }
 
-        $query = Archive::with(['dossier.mois.annee', 'createur', 'validateur'])
+        $query = Archive::with([
+            'dossier:id,nom,mois_id,couleur',
+            'dossier.mois:id,nom_mois,annee_id,mois',
+            'dossier.mois.annee:id,annee',
+            'createur:id,name',
+            'validateur:id,name'
+        ])
             ->whereIn('validation_status', [Archive::STATUS_PENDING, Archive::STATUS_REJECTED])
             ->where('created_by', $user->id);
 
@@ -45,11 +59,15 @@ class ArchivisteController extends Controller
         ->when($request->date_debut, fn($q, $dd) => $q->whereDate('date_document', '>=', $dd))
         ->when($request->date_fin, fn($q, $df) => $q->whereDate('date_document', '<=', $df));
 
+        $typeDocuments = Cache::remember('distinct_archive_types', 300, function () {
+            return Archive::select('type_document')->distinct()->pluck('type_document');
+        });
+
         return Inertia::render('Archiviste/PendingRejected', [
             'filters' => $request->all(['search', 'dossier_id', 'type', 'date_debut', 'date_fin', 'validation_status']),
             'archives' => $query->latest()->paginate(15)->withQueryString(),
             'dossiers' => Dossier::with(['mois.annee'])->orderBy('nom')->get(['id', 'nom', 'mois_id', 'couleur']),
-            'type_documents' => Archive::select('type_document')->distinct()->pluck('type_document'),
+            'type_documents' => $typeDocuments,
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
             'mois' => DossierMois::with('annee')->where('active', true)->orderBy('mois')->get(['id', 'annee_id', 'mois', 'nom_mois']),
             'user' => $user,
@@ -105,8 +123,9 @@ class ArchivisteController extends Controller
             }
 
             // Store new file
-            $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
-            $path = $file->store($chemin, 'archives');
+            $baseDir = $archive->type_document_confidentiel == 1 ? 'archives_confidentielles' : 'archives';
+            $chemin = "{$baseDir}/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
+            $path = $file->store($chemin, 'public');
 
             $data['fichier_path'] = $path;
             $data['fichier_nom_original'] = $file->getClientOriginalName();
@@ -116,6 +135,8 @@ class ArchivisteController extends Controller
         }
 
         $archive->update($data);
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', 'Archive mise à jour avec succès.');
     }
@@ -142,6 +163,8 @@ class ArchivisteController extends Controller
             'validated_at' => null
         ]);
 
+        $this->invalidateCaches();
+
         \App\Models\ActivityLog::log('archive_resubmitted', "A resoumis l'archive rejetée {$archive->reference} pour validation.");
 
         return redirect()->back()->with('success', 'Archive resoumise pour validation avec succès.');
@@ -167,6 +190,9 @@ class ArchivisteController extends Controller
         }
 
         $archive->delete();
+
+        $this->invalidateCaches();
+
         return redirect()->back()->with('success', 'Archive supprimée avec succès.');
     }
 

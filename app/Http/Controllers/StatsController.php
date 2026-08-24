@@ -15,47 +15,77 @@ use Illuminate\Support\Facades\Cache;
 
 class StatsController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $user = Auth::user();
 
         if (!$user) return redirect()->route('login');
 
-        if ($user->isDivision()) {
-            abort(403, 'Vous n\'avez pas les droits pour accéder aux statistiques.');
-        }
-
         $isAdmin = $user->isAdmin();
         $isGestionnaire = $user->isGestionnaire();
         $isArchiviste = $user->isArchiviste();
 
-        try {
-            $globalStats = Cache::remember('stats_global', 300, function () {
-                $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
-                    ->groupBy('validation_status')
-                    ->pluck('total', 'validation_status');
+        $isConfidential = $request->query('space') === 'confidential';
 
-                return [
-                    'totalArchives' => Archive::count(),
-                    'totalDossiers' => Dossier::count(),
-                    'totalAnnees' => DossierAnnee::count(),
-                    'totalMois' => DossierMois::count(),
-                    'archivesParAnnee' => Archive::selectRaw('YEAR(date_document) as annee, COUNT(*) as total')
-                        ->whereNotNull('date_document')
-                        ->groupBy('annee')
-                        ->orderBy('annee', 'desc')
-                        ->get(),
-                    'archivesParType' => Archive::selectRaw('type_document, COUNT(*) as total')
-                        ->whereNotNull('type_document')
-                        ->groupBy('type_document')
-                        ->get(),
-                    'archivesParStatut' => [
-                        'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
-                        'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
-                        'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
-                    ]
+        if ($isConfidential && !$user->canViewConfidential()) {
+            abort(403, 'Accès refusé aux statistiques confidentielles.');
+        }
+
+        $requiresUnlock = $isConfidential && !session('unlocked_confidential');
+
+        try {
+            // Définir $condition ICI (hors du cache) pour qu'elle soit accessible
+            // aux requêtes de stats personnelles archiviste/gestionnaire/admin
+            $condition = function($q) use ($isConfidential) {
+                if ($isConfidential) {
+                    $q->where('type_document_confidentiel', 1);
+                } else {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                }
+            };
+
+            if ($requiresUnlock) {
+                // Si l'espace est verrouillé, on ne charge aucune stat
+                $globalStats = [
+                    'totalArchives' => 0, 'totalDossiers' => 0,
+                    'totalAnnees' => 0, 'totalMois' => 0,
+                    'archivesParAnnee' => [], 'archivesParType' => [],
+                    'archivesParStatut' => ['pending' => 0, 'validated' => 0, 'rejected' => 0]
                 ];
-            });
+            } else {
+                $cacheKey = $isConfidential ? 'stats_confidential_global' : 'stats_global';
+
+                $globalStats = Cache::remember($cacheKey, 300, function () use ($isConfidential, $condition) {
+                    $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
+                        ->where($condition)
+                        ->groupBy('validation_status')
+                        ->pluck('total', 'validation_status');
+
+                    return [
+                        'totalArchives' => Archive::where($condition)->count(),
+                        'totalDossiers' => Dossier::whereHas('archives', $condition)->count(),
+                        'totalAnnees' => DossierAnnee::whereHas('mois.dossiers.archives', $condition)->count(),
+                        'totalMois' => DossierMois::whereHas('dossiers.archives', $condition)->count(),
+                        'archivesParAnnee' => Archive::selectRaw('YEAR(date_document) as annee, COUNT(*) as total')
+                            ->where($condition)
+                            ->whereNotNull('date_document')
+                            ->groupBy('annee')
+                            ->orderBy('annee', 'desc')
+                            ->get(),
+                        'archivesParType' => Archive::selectRaw('type_document, COUNT(*) as total')
+                            ->where($condition)
+                            ->whereNotNull('type_document')
+                            ->groupBy('type_document')
+                            ->get(),
+                        'archivesParStatut' => [
+                            'pending' => $statutCounts[Archive::STATUS_PENDING] ?? 0,
+                            'validated' => $statutCounts[Archive::STATUS_VALIDATED] ?? 0,
+                            'rejected' => $statutCounts[Archive::STATUS_REJECTED] ?? 0,
+                        ]
+                    ];
+                });
+            }
 
             $totalArchives = $globalStats['totalArchives'];
             $totalDossiers = $globalStats['totalDossiers'];
@@ -65,76 +95,84 @@ class StatsController extends Controller
             $archivesParType = $globalStats['archivesParType'];
             $archivesParStatut = $globalStats['archivesParStatut'];
 
-            $recentArchives = $this->getRecentArchives($user);
+            $recentArchives = $this->getRecentArchives($user, $isConfidential, $requiresUnlock);
 
             // Stats personnelles archiviste
             $myStats = null;
-            if ($isArchiviste) {
-                $perso = Archive::selectRaw('
-                    count(*) as total,
-                    sum(case when validation_status = ? then 1 else 0 end) as en_attente,
-                    sum(case when validation_status = ? then 1 else 0 end) as validees,
-                    sum(case when month(created_at) = ? and year(created_at) = ? then 1 else 0 end) as ce_mois,
-                    sum(case when created_at between ? and ? then 1 else 0 end) as cette_semaine
-                ', [
-                    Archive::STATUS_PENDING,
-                    Archive::STATUS_VALIDATED,
-                    now()->month, now()->year,
-                    now()->startOfWeek(), now()->endOfWeek(),
-                ])->where('created_by', $user->id)->first();
+            if (!$requiresUnlock) {
+                if ($isArchiviste) {
+                    $perso = Archive::selectRaw('
+                        count(*) as total,
+                        sum(case when validation_status = ? then 1 else 0 end) as en_attente,
+                        sum(case when validation_status = ? then 1 else 0 end) as validees,
+                        sum(case when month(created_at) = ? and year(created_at) = ? then 1 else 0 end) as ce_mois,
+                        sum(case when created_at between ? and ? then 1 else 0 end) as cette_semaine
+                    ', [
+                        Archive::STATUS_PENDING,
+                        Archive::STATUS_VALIDATED,
+                        now()->month, now()->year,
+                        now()->startOfWeek(), now()->endOfWeek(),
+                    ])
+                    ->where($condition)
+                    ->where('created_by', $user->id)->first();
 
-                $myStats = [
-                    'total_archives' => $perso->total ?? 0,
-                    'archives_ce_mois' => $perso->ce_mois ?? 0,
-                    'archives_cette_semaine' => $perso->cette_semaine ?? 0,
-                    'en_attente' => $perso->en_attente ?? 0,
-                    'validees' => $perso->validees ?? 0,
-                ];
-            } elseif ($isGestionnaire || $isAdmin) {
-                $perso = Archive::selectRaw('
-                    count(*) as total,
-                    sum(case when validation_status = ? then 1 else 0 end) as en_attente,
-                    sum(case when validation_status = ? then 1 else 0 end) as validees,
-                    sum(case when validation_status = ? then 1 else 0 end) as rejetees,
-                    sum(case when month(created_at) = ? and year(created_at) = ? then 1 else 0 end) as ce_mois,
-                    sum(case when created_at between ? and ? then 1 else 0 end) as cette_semaine
-                ', [
-                    Archive::STATUS_PENDING,
-                    Archive::STATUS_VALIDATED,
-                    Archive::STATUS_REJECTED,
-                    now()->month, now()->year,
-                    now()->startOfWeek(), now()->endOfWeek(),
-                ])->first();
+                    $myStats = [
+                        'total_archives' => $perso->total ?? 0,
+                        'archives_ce_mois' => $perso->ce_mois ?? 0,
+                        'archives_cette_semaine' => $perso->cette_semaine ?? 0,
+                        'en_attente' => $perso->en_attente ?? 0,
+                        'validees' => $perso->validees ?? 0,
+                    ];
+                } elseif ($isGestionnaire || $isAdmin) {
+                    $perso = Archive::selectRaw('
+                        count(*) as total,
+                        sum(case when validation_status = ? then 1 else 0 end) as en_attente,
+                        sum(case when validation_status = ? then 1 else 0 end) as validees,
+                        sum(case when validation_status = ? then 1 else 0 end) as rejetees,
+                        sum(case when month(created_at) = ? and year(created_at) = ? then 1 else 0 end) as ce_mois,
+                        sum(case when created_at between ? and ? then 1 else 0 end) as cette_semaine
+                    ', [
+                        Archive::STATUS_PENDING,
+                        Archive::STATUS_VALIDATED,
+                        Archive::STATUS_REJECTED,
+                        now()->month, now()->year,
+                        now()->startOfWeek(), now()->endOfWeek(),
+                    ])
+                    ->where($condition)
+                    ->first();
 
-                $archivistesActifs = Archive::whereMonth('created_at', now()->month)
-                    ->whereYear('created_at', now()->year)
-                    ->distinct('created_by')
-                    ->count('created_by');
+                    $archivistesActifs = Archive::whereMonth('created_at', now()->month)
+                        ->whereYear('created_at', now()->year)
+                        ->where($condition)
+                        ->distinct('created_by')
+                        ->count('created_by');
 
-                // Top 5 archivistes du mois
-                $topArchivistes = Archive::selectRaw('created_by, count(*) as total')
-                    ->whereMonth('created_at', now()->month)
-                    ->whereYear('created_at', now()->year)
-                    ->groupBy('created_by')
-                    ->orderByDesc('total')
-                    ->limit(5)
-                    ->with('createur:id,name')
-                    ->get()
-                    ->map(fn($a) => [
-                        'nom' => $a->createur?->name ?? 'Inconnu',
-                        'total' => $a->total,
-                    ]);
+                    // Top 5 archivistes du mois
+                    $topArchivistes = Archive::selectRaw('created_by, count(*) as total')
+                        ->whereMonth('created_at', now()->month)
+                        ->whereYear('created_at', now()->year)
+                        ->where($condition)
+                        ->groupBy('created_by')
+                        ->orderByDesc('total')
+                        ->limit(5)
+                        ->with('createur:id,name')
+                        ->get()
+                        ->map(fn($a) => [
+                            'nom' => $a->createur?->name ?? 'Inconnu',
+                            'total' => $a->total,
+                        ]);
 
-                $myStats = [
-                    'total_archives' => $perso->total ?? 0,
-                    'archives_ce_mois' => $perso->ce_mois ?? 0,
-                    'archives_cette_semaine' => $perso->cette_semaine ?? 0,
-                    'en_attente' => $perso->en_attente ?? 0,
-                    'validees' => $perso->validees ?? 0,
-                    'rejetees' => $perso->rejetees ?? 0,
-                    'archivistes_actifs_ce_mois' => $archivistesActifs,
-                    'top_archivistes' => $topArchivistes,
-                ];
+                    $myStats = [
+                        'total_archives' => $perso->total ?? 0,
+                        'archives_ce_mois' => $perso->ce_mois ?? 0,
+                        'archives_cette_semaine' => $perso->cette_semaine ?? 0,
+                        'en_attente' => $perso->en_attente ?? 0,
+                        'validees' => $perso->validees ?? 0,
+                        'rejetees' => $perso->rejetees ?? 0,
+                        'archivistes_actifs_ce_mois' => $archivistesActifs,
+                        'top_archivistes' => $topArchivistes,
+                    ];
+                }
             }
 
             // Stats de validation (gestionnaire/admin uniquement)
@@ -166,6 +204,10 @@ class StatsController extends Controller
                     'is_archiviste' => $isArchiviste,
                     'is_gestionnaire' => $isGestionnaire,
                     'is_admin' => $isAdmin,
+                    'is_division' => $user->isDivision(),
+                    'has_confidential_access' => $user->canViewConfidential(),
+                    'is_confidential_space' => $isConfidential,
+                    'requires_unlock' => $requiresUnlock,
                 ]
             ]);
 
@@ -184,14 +226,24 @@ class StatsController extends Controller
         }
     }
 
-    private function getRecentArchives(User $user): array
+    private function getRecentArchives(User $user, bool $isConfidential = false, bool $requiresUnlock = false): array
     {
+        if ($requiresUnlock) return [];
+
         return Archive::with([
             'dossier:id,nom,mois_id',
             'dossier.mois:id,nom_mois,annee_id',
             'dossier.mois.annee:id,annee',
             'createur:id,name',
         ])
+            ->where(function($q) use ($isConfidential) {
+                if ($isConfidential) {
+                    $q->where('type_document_confidentiel', 1);
+                } else {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                }
+            })
             ->when($user->isArchiviste(), fn($q) => $q->where('created_by', $user->id))
             ->when($user->isDivision(), fn($q) =>
                 $q->where('validation_status', Archive::STATUS_VALIDATED))

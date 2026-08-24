@@ -8,6 +8,7 @@ use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
 {
@@ -18,7 +19,10 @@ class UserController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour gérer les utilisateurs.');
         }
 
-        $users = User::all();
+        $users = User::all()->map(function ($user) {
+            $user->has_confidential_password = !empty($user->mot_de_passe_confidentiel);
+            return $user;
+        });
 
         return Inertia::render('Users/Index', [
             'users' => $users,
@@ -46,13 +50,21 @@ class UserController extends Controller
             'email' => 'required|email|unique:users,email',
             'role' => 'required|in:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN . ',' . User::ROLE_DIVISION,
             'password' => 'required|string|min:8',
+            'peut_archiver_confidentiel' => 'nullable|boolean',
+            'peut_valider_confidentiel' => 'nullable|boolean',
+            'peut_consulter_confidentiel' => 'nullable|boolean',
+            'mot_de_passe_confidentiel' => 'nullable|string',
         ]);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'role' => $request->role,
-            'password' => bcrypt($request->password),
+            'password' => Hash::make($request->password),
+            'peut_archiver_confidentiel' => $request->peut_archiver_confidentiel ?? false,
+            'peut_valider_confidentiel' => $request->peut_valider_confidentiel ?? false,
+            'peut_consulter_confidentiel' => $request->peut_consulter_confidentiel ?? false,
+            'mot_de_passe_confidentiel' => $request->mot_de_passe_confidentiel ? Hash::make($request->mot_de_passe_confidentiel) : null,
         ]);
 
         ActivityLog::log('user_created', "A créé l'utilisateur {$user->name} ({$user->email})");
@@ -71,9 +83,29 @@ class UserController extends Controller
             'role' => 'required|in:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN . ',' . User::ROLE_DIVISION,
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email,' . $user->id,
+            'peut_archiver_confidentiel' => 'nullable|boolean',
+            'peut_valider_confidentiel' => 'nullable|boolean',
+            'peut_consulter_confidentiel' => 'nullable|boolean',
+            'mot_de_passe_confidentiel' => 'nullable|string',
+            'remove_confidential_password' => 'nullable|boolean',
         ]);
 
-        $user->update($request->only(['name', 'email', 'role']));
+        $data = $request->only(['name', 'email', 'role']);
+        $data['peut_archiver_confidentiel'] = $request->peut_archiver_confidentiel ? 1 : 0;
+        $data['peut_valider_confidentiel'] = $request->peut_valider_confidentiel ? 1 : 0;
+        $data['peut_consulter_confidentiel'] = $request->peut_consulter_confidentiel ? 1 : 0;
+
+        // Cas 1 : L'admin veut supprimer le mot de passe confidentiel
+        if ($request->boolean('remove_confidential_password')) {
+            $data['mot_de_passe_confidentiel'] = null;
+        }
+        // Cas 2 : Un nouveau mot de passe est saisi → on le remplace
+        elseif ($request->filled('mot_de_passe_confidentiel')) {
+            $data['mot_de_passe_confidentiel'] = \Illuminate\Support\Facades\Hash::make($request->mot_de_passe_confidentiel);
+        }
+        // Cas 3 : Champ vide et pas de suppression → on conserve l'ancien (ne rien faire)
+
+        $user->update($data);
 
         ActivityLog::log('user_updated', "A modifié l'utilisateur {$user->name} ({$user->email})");
 

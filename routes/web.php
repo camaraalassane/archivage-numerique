@@ -13,6 +13,7 @@ use App\Http\Controllers\StatsController;
 use App\Http\Controllers\ArchivisteController;
 use App\Http\Controllers\GestionnaireController;
 use App\Http\Controllers\ActivityLogController;
+use App\Http\Controllers\ConfidentialSpaceController;
 use App\Models\User;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -46,6 +47,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     // Route AJAX pour charger les archives d'un dossier (Dashboard)
     Route::get('/dossiers/{dossier}/archives', [DossierController::class, 'archives'])->name('dossiers.archives');
+
+    // Espace Confidentiel
+    Route::post('/confidential/unlock', [ConfidentialSpaceController::class, 'unlock'])->name('confidential.unlock');
+    Route::post('/confidential/lock', [ConfidentialSpaceController::class, 'lock'])->name('confidential.lock');
+    Route::get('/confidential', [ConfidentialSpaceController::class, 'index'])->name('confidential.index');
+    Route::get('/confidential/dossiers/{dossier}/archives', [ConfidentialSpaceController::class, 'getDossierArchives'])->name('confidential.dossiers.archives');
 });
 
 // ============================================

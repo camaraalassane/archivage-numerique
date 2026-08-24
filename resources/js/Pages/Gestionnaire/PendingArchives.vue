@@ -6,17 +6,21 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 const props = defineProps({
     pendingArchives: { type: Array, default: () => [] },
     archivistes: { type: Array, default: () => [] },
+    user: { type: Object, required: true },
 });
 
 // États
+const currentTab = ref('ordinaire');
 const selectedIds = ref([]);
 const rejectDialog = ref(false);
 const rejectAllDialog = ref(false);
 const confirmDialog = ref(false);
 const previewDialog = ref(false);
+const validateDialog = ref(false);
 const currentArchive = ref(null);
 const rejectReason = ref('');
 const rejectAllReason = ref('');
+const validateReason = ref('');
 const searchQuery = ref('');
 const expandedArchiviste = ref(null);
 const currentFileUrl = ref('');
@@ -49,10 +53,23 @@ const executeConfirm = () => {
     confirmDialog.value = false;
 };
 
+// Filtrage par type (ordinaire vs confidentiel)
+const filteredArchives = computed(() => {
+    return props.pendingArchives.filter(a => {
+        if (currentTab.value === 'confidentiel') {
+            return a.type_document_confidentiel === 1;
+        }
+        return a.type_document_confidentiel !== 1;
+    });
+});
+
+const countOrdinaire = computed(() => props.pendingArchives.filter(a => a.type_document_confidentiel !== 1).length);
+const countConfidentiel = computed(() => props.pendingArchives.filter(a => a.type_document_confidentiel === 1).length);
+
 // Groupement par archiviste
 const archivesByArchiviste = computed(() => {
     const groups = {};
-    props.pendingArchives.forEach(archive => {
+    filteredArchives.value.forEach(archive => {
         const key = archive.created_by || 0;
         const name = archive.createur?.name || 'Archiviste ' + key;
         if (!groups[key]) {
@@ -95,18 +112,11 @@ const previewFile = (archive) => {
 };
 
 // Validation individuelle
-const openValidateDialog = (archive) => {
-    currentArchive.value = archive;
-    validateReason.value = 'Validé par le gestionnaire';
-    validateDialog.value = true;
-};
-
-const confirmValidate = () => {
-    router.post(route('gestionnaire.validate', currentArchive.value.id), {
-        comment: validateReason.value || 'Validé par le gestionnaire'
+const validateArchive = (archive) => {
+    router.post(route('gestionnaire.validate', archive.id), {
+        comment: 'Validé par le gestionnaire'
     }, {
         onSuccess: () => {
-            validateDialog.value = false;
             showNotification('✅ Archive validée');
             router.reload({ only: ['pendingArchives'] });
         },
@@ -310,26 +320,6 @@ const getDossierPath = (archive) => {
             </v-card>
         </v-dialog>
 
-        <!-- DIALOGUE VALIDATION -->
-        <v-dialog v-model="validateDialog" max-width="400px" persistent>
-            <v-card class="rounded-lg">
-                <v-toolbar color="success" dark density="compact">
-                    <v-icon start size="small">mdi-check-circle</v-icon>
-                    <v-toolbar-title class="text-subtitle-1">Valider l'archive</v-toolbar-title>
-                    <v-spacer></v-spacer>
-                    <v-btn icon="mdi-close" variant="text" size="small" @click="validateDialog = false"></v-btn>
-                </v-toolbar>
-                <v-card-text class="pa-4">
-                    <p class="mb-2 text-body-2 font-weight-medium">{{ currentArchive?.titre }}</p>
-                    <v-textarea v-model="validateReason" label="Motif de validation (Optionnel)" rows="2" density="compact"></v-textarea>
-                </v-card-text>
-                <v-card-actions class="pa-2 bg-grey-lighten-4">
-                    <v-spacer></v-spacer>
-                    <v-btn variant="text" size="small" @click="validateDialog = false">Annuler</v-btn>
-                    <v-btn color="success" variant="flat" size="small" @click="confirmValidate">Valider</v-btn>
-                </v-card-actions>
-            </v-card>
-        </v-dialog>
 
         <!-- Dialogue Rejet en masse -->
         <v-dialog v-model="rejectAllDialog" max-width="450px">
@@ -360,7 +350,22 @@ const getDossierPath = (archive) => {
             <v-toolbar color="primary" dark class="rounded-t-xl" density="compact">
                 <v-icon start class="ml-2">mdi-account-check</v-icon>
                 <v-toolbar-title class="text-subtitle-1 font-weight-bold">Archives en attente</v-toolbar-title>
+                
                 <v-spacer></v-spacer>
+
+                <!-- Toggle Ordinaire / Confidentiel -->
+                <v-btn-toggle v-model="currentTab" mandatory density="compact" class="mx-4 bg-white" color="primary" rounded="lg">
+                    <v-btn value="ordinaire" size="small">
+                        Ordinaire
+                        <v-chip size="x-small" :color="currentTab === 'ordinaire' ? 'primary' : 'grey'" class="ml-1">{{ countOrdinaire }}</v-chip>
+                    </v-btn>
+                    <v-btn value="confidentiel" size="small" v-if="props.user.peut_valider_confidentiel == 1 || props.user.role === 3">
+                        <v-icon start size="small" color="error">mdi-shield-lock</v-icon>
+                        Confidentiel
+                        <v-chip size="x-small" :color="currentTab === 'confidentiel' ? 'error' : 'grey'" class="ml-1">{{ countConfidentiel }}</v-chip>
+                    </v-btn>
+                </v-btn-toggle>
+
                 <v-text-field
                     v-model="searchQuery"
                     prepend-inner-icon="mdi-magnify"
@@ -372,7 +377,6 @@ const getDossierPath = (archive) => {
                     class="mx-2"
                     style="max-width: 220px;"
                 ></v-text-field>
-                <v-chip color="warning" size="small" class="ml-2">{{ pendingArchives.length }}</v-chip>
             </v-toolbar>
 
             <v-card-text class="pa-2">
@@ -459,7 +463,7 @@ const getDossierPath = (archive) => {
                                                         <!-- ⬇️ Téléchargement -->
                                                         <v-btn icon="mdi-download" size="x-small" variant="text" color="primary" :href="route('gestionnaire.download', archive.id)" title="Télécharger"></v-btn>
                                                         <!-- ✅ Valider -->
-                                                        <v-btn icon="mdi-check" size="x-small" variant="flat" color="success" @click="openValidateDialog(archive)" title="Valider"></v-btn>
+                                                        <v-btn icon="mdi-check" size="x-small" variant="flat" color="success" @click="validateArchive(archive)" title="Valider"></v-btn>
                                                         <!-- ❌ Rejeter -->
                                                         <v-btn icon="mdi-close" size="x-small" variant="flat" color="error" @click="openRejectDialog(archive)" title="Rejeter"></v-btn>
                                                         <!-- 🗑️ Supprimer -->
@@ -476,9 +480,9 @@ const getDossierPath = (archive) => {
                 </v-row>
 
                 <!-- Message vide -->
-                <div v-if="pendingArchives.length === 0" class="text-center py-8">
+                <div v-if="filteredArchives.length === 0" class="text-center py-8">
                     <v-icon size="48" color="grey-lighten-2" class="mb-2">mdi-check-circle</v-icon>
-                    <div class="text-h6 text-grey-lighten-1">Aucune archive en attente</div>
+                    <div class="text-h6 text-grey-lighten-1">Aucune archive {{ currentTab === 'ordinaire' ? 'ordinaire' : 'confidentielle' }} en attente</div>
                     <div class="text-caption text-grey mt-1">Toutes les archives ont été traitées</div>
                 </div>
             </v-card-text>

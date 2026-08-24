@@ -1,6 +1,5 @@
-<!-- resources/js/Pages/Users/Index.vue -->
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { Head, useForm, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 
@@ -14,19 +13,45 @@ const deleteDialog = ref(false);
 const createDialog = ref(false);
 const editingUser = ref(null);
 const userToDelete = ref(null);
+const removeConfidentialPassword = ref(false);
+const editingUserId = ref(null);
 
 const form = useForm({
     name: '',
     email: '',
     role: 1,
+    peut_archiver_confidentiel: false,
+    peut_valider_confidentiel: false,
+    peut_consulter_confidentiel: false,
+    mot_de_passe_confidentiel: '',
+    remove_confidential_password: false,
 });
+
+const createTab = ref('ordinaire');
+const editTab = ref('ordinaire');
 
 const createForm = useForm({
     name: '',
     email: '',
     role: 1,
     password: '',
+    peut_archiver_confidentiel: false,
+    peut_valider_confidentiel: false,
+    peut_consulter_confidentiel: false,
+    mot_de_passe_confidentiel: '',
 });
+
+const editingUserHasPassword = computed(() => {
+    const user = props.users.find(u => u.id === editingUserId.value);
+    return !!user?.has_confidential_password;
+});
+
+const openCreateDialog = () => {
+    createForm.reset();
+    createForm.clearErrors();
+    createTab.value = 'ordinaire';
+    createDialog.value = true;
+};
 
 const createUser = () => {
     createForm.post(route('users.store'), {
@@ -38,20 +63,29 @@ const createUser = () => {
 };
 
 const openEditDialog = (user) => {
-    editingUser.value = user;
+    form.clearErrors();
+    editTab.value = 'ordinaire';
+    editingUserId.value = user.id;
     form.name = user.name;
     form.email = user.email;
     form.role = user.role;
-    form.clearErrors();
+    form.peut_archiver_confidentiel = !!user.peut_archiver_confidentiel;
+    form.peut_valider_confidentiel = !!user.peut_valider_confidentiel;
+    form.peut_consulter_confidentiel = !!user.peut_consulter_confidentiel;
+    form.mot_de_passe_confidentiel = '';
+    form.remove_confidential_password = false;
+    removeConfidentialPassword.value = false;
     editDialog.value = true;
 };
 
 const updateUser = () => {
-    form.put(route('users.update', editingUser.value.id), {
+    form.remove_confidential_password = removeConfidentialPassword.value;
+    form.put(route('users.update', editingUserId.value), {
         onSuccess: () => {
             editDialog.value = false;
-            editingUser.value = null;
+            editingUserId.value = null;
             form.reset();
+            removeConfidentialPassword.value = false;
         }
     });
 };
@@ -94,7 +128,7 @@ const getRoleColor = (role) => {
                     </div>
                 </div>
                 <v-spacer></v-spacer>
-                <v-btn color="primary" prepend-icon="mdi-account-plus" @click="createDialog = true">
+                <v-btn color="primary" prepend-icon="mdi-account-plus" @click="openCreateDialog">
                     Créer un utilisateur
                 </v-btn>
             </v-toolbar>
@@ -105,6 +139,7 @@ const getRoleColor = (role) => {
                         <th class="text-overline">Nom</th>
                         <th class="text-overline">Email</th>
                         <th class="text-overline text-center">Rôle</th>
+                        <th class="text-overline text-center">Confidentiel</th>
                         <th class="text-overline text-center">Actions</th>
                     </tr>
                 </thead>
@@ -116,6 +151,12 @@ const getRoleColor = (role) => {
                             <v-chip :color="getRoleColor(user.role)" size="small">
                                 {{ getRoleLabel(user.role) }}
                             </v-chip>
+                        </td>
+                        <td class="text-center">
+                            <v-icon v-if="user.has_confidential_password" color="error" title="Mot de passe défini" size="small">mdi-shield-lock</v-icon>
+                            <v-icon v-if="user.peut_consulter_confidentiel" color="info" class="ml-1" title="Droit de consultation confidentiel" size="small">mdi-eye-lock</v-icon>
+                            <v-icon v-if="user.peut_archiver_confidentiel" color="warning" class="ml-1" title="Droit d'archivage confidentiel" size="small">mdi-upload-lock</v-icon>
+                            <v-icon v-if="user.peut_valider_confidentiel" color="success" class="ml-1" title="Droit de validation confidentiel" size="small">mdi-check-decagram</v-icon>
                         </td>
                         <td class="text-center">
                             <v-btn icon="mdi-pencil" size="small" variant="text" color="primary"
@@ -138,27 +179,51 @@ const getRoleColor = (role) => {
                 </v-toolbar>
                 <v-card-text class="pa-6">
                     <v-form @submit.prevent="createUser">
-                        <v-text-field v-model="createForm.name" label="Nom" variant="outlined"
-                            :error-messages="createForm.errors.name" required></v-text-field>
+                        <v-tabs v-model="createTab" color="primary" class="mb-4">
+                            <v-tab value="ordinaire">Infos Ordinaires</v-tab>
+                            <v-tab value="confidentiel" color="error">
+                                <v-icon start>mdi-shield-lock</v-icon> Accès Confidentiel
+                            </v-tab>
+                        </v-tabs>
 
-                        <v-text-field v-model="createForm.email" label="Email" type="email" variant="outlined"
-                            :error-messages="createForm.errors.email" required></v-text-field>
+                        <v-window v-model="createTab">
+                            <v-window-item value="ordinaire">
+                                <v-text-field v-model="createForm.name" label="Nom" variant="outlined"
+                                    :error-messages="createForm.errors.name" required></v-text-field>
 
-                        <v-text-field v-model="createForm.password" label="Mot de passe" type="password" variant="outlined"
-                            :error-messages="createForm.errors.password" required></v-text-field>
+                                <v-text-field v-model="createForm.email" label="Email" type="email" variant="outlined"
+                                    :error-messages="createForm.errors.email" required></v-text-field>
 
-                        <v-select v-model="createForm.role" :items="roles" item-title="name" item-value="id" label="Rôle"
-                            variant="outlined" :error-messages="createForm.errors.role" required>
-                            <template v-slot:item="{ item, props: itemProps }">
-                                <v-list-item v-bind="itemProps">
-                                    <div class="d-flex align-center">
-                                        <v-chip :color="item.value === 2 ? 'success' : 'primary'" size="small" class="mr-2">
-                                            {{ item.title }}
-                                        </v-chip>
-                                    </div>
-                                </v-list-item>
-                            </template>
-                        </v-select>
+                                <v-text-field v-model="createForm.password" label="Mot de passe" type="password" variant="outlined"
+                                    :error-messages="createForm.errors.password" required></v-text-field>
+
+                                <v-select v-model="createForm.role" :items="roles" item-title="name" item-value="id" label="Rôle"
+                                    variant="outlined" :error-messages="createForm.errors.role" required>
+                                    <template v-slot:item="{ item, props: itemProps }">
+                                        <v-list-item v-bind="itemProps">
+                                            <div class="d-flex align-center">
+                                                <v-chip :color="item.value === 2 ? 'success' : 'primary'" size="small" class="mr-2">
+                                                    {{ item.title }}
+                                                </v-chip>
+                                            </div>
+                                        </v-list-item>
+                                    </template>
+                                </v-select>
+                            </v-window-item>
+
+                            <v-window-item value="confidentiel">
+                                <v-alert type="info" variant="tonal" density="compact" class="mb-4 text-caption">
+                                    Configurez ici les droits spécifiques et le mot de passe pour l'espace confidentiel.
+                                </v-alert>
+
+                                <v-text-field v-model="createForm.mot_de_passe_confidentiel" label="Mot de passe confidentiel" type="text" variant="outlined" density="comfortable"
+                                    :error-messages="createForm.errors.mot_de_passe_confidentiel" hint="Laissez vide si l'utilisateur n'a pas accès" persistent-hint></v-text-field>
+
+                                <v-switch v-model="createForm.peut_consulter_confidentiel" color="info" label="Peut consulter les archives confidentielles" hide-details class="mt-3"></v-switch>
+                                <v-switch v-model="createForm.peut_archiver_confidentiel" color="error" label="Peut archiver des documents confidentiels" hide-details></v-switch>
+                                <v-switch v-model="createForm.peut_valider_confidentiel" color="success" label="Peut valider des documents confidentiels" class="mb-2"></v-switch>
+                            </v-window-item>
+                        </v-window>
 
                         <div class="d-flex justify-end mt-4">
                             <v-btn variant="text" @click="createDialog = false">Annuler</v-btn>
@@ -181,25 +246,77 @@ const getRoleColor = (role) => {
                 </v-toolbar>
                 <v-card-text class="pa-6">
                     <v-form @submit.prevent="updateUser">
-                        <v-text-field v-model="form.name" label="Nom" variant="outlined"
-                            :error-messages="form.errors.name" required></v-text-field>
+                        <!-- TABS -->
+                        <v-tabs v-model="editTab" color="primary" class="mb-4">
+                            <v-tab value="ordinaire">Infos Ordinaires</v-tab>
+                            <v-tab value="confidentiel" color="error">
+                                <v-icon start>mdi-shield-lock</v-icon> Accès Confidentiel
+                            </v-tab>
+                        </v-tabs>
 
-                        <v-text-field v-model="form.email" label="Email" type="email" variant="outlined"
-                            :error-messages="form.errors.email" required></v-text-field>
+                        <v-window v-model="editTab">
+                            <v-window-item value="ordinaire">
+                                <v-text-field v-model="form.name" label="Nom" variant="outlined"
+                                    :error-messages="form.errors.name" required></v-text-field>
 
-                        <v-select v-model="form.role" :items="roles" item-title="name" item-value="id" label="Rôle"
-                            variant="outlined" :error-messages="form.errors.role" required>
-                            <template v-slot:item="{ item, props: itemProps }">
-                                <v-list-item v-bind="itemProps">
-                                    <div class="d-flex align-center">
-                                        <v-chip :color="item.value === 2 ? 'success' : 'primary'" size="small"
-                                            class="mr-2">
-                                            {{ item.title }}
-                                        </v-chip>
+                                <v-text-field v-model="form.email" label="Email" type="email" variant="outlined"
+                                    :error-messages="form.errors.email" required></v-text-field>
+
+                                <v-select v-model="form.role" :items="roles" item-title="name" item-value="id" label="Rôle"
+                                    variant="outlined" :error-messages="form.errors.role" required>
+                                    <template v-slot:item="{ item, props: itemProps }">
+                                        <v-list-item v-bind="itemProps">
+                                            <div class="d-flex align-center">
+                                                <v-chip :color="item.value === 2 ? 'success' : 'primary'" size="small"
+                                                    class="mr-2">
+                                                    {{ item.title }}
+                                                </v-chip>
+                                            </div>
+                                        </v-list-item>
+                                    </template>
+                                </v-select>
+                            </v-window-item>
+
+                            <v-window-item value="confidentiel">
+                                <!-- Indicateur mot de passe existant -->
+                                <v-alert v-if="editingUserHasPassword && !removeConfidentialPassword"
+                                    type="info" variant="tonal" density="compact" class="mb-3">
+                                    <div class="d-flex align-center justify-space-between">
+                                        <span class="text-caption">✅ Mot de passe confidentiel déjà défini</span>
+                                        <v-btn size="x-small" color="error" variant="text"
+                                            @click="removeConfidentialPassword = true; form.mot_de_passe_confidentiel = ''">Retirer</v-btn>
                                     </div>
-                                </v-list-item>
-                            </template>
-                        </v-select>
+                                </v-alert>
+
+                                <v-alert v-if="removeConfidentialPassword"
+                                    type="warning" variant="tonal" density="compact" class="mb-3">
+                                    <div class="d-flex align-center justify-space-between">
+                                        <span class="text-caption">⚠️ Le mot de passe sera supprimé</span>
+                                        <v-btn size="x-small" color="success" variant="text"
+                                            @click="removeConfidentialPassword = false">Annuler</v-btn>
+                                    </div>
+                                </v-alert>
+
+                                <!-- Champ mot de passe : visible si pas de mot de passe OU qu'on veut en définir un nouveau -->
+                                <v-text-field
+                                    v-if="!removeConfidentialPassword"
+                                    v-model="form.mot_de_passe_confidentiel"
+                                    :label="editingUserHasPassword ? 'Nouveau mot de passe (laisser vide pour garder l\'actuel)' : 'Définir un mot de passe confidentiel'"
+                                    type="text" variant="outlined" density="comfortable"
+                                    :error-messages="form.errors.mot_de_passe_confidentiel"
+                                    :hint="editingUserHasPassword ? 'Laissez vide pour conserver le mot de passe actuel' : 'Laissez vide pour ne pas définir de mot de passe'"
+                                    persistent-hint></v-text-field>
+
+                                <v-switch v-model="form.peut_consulter_confidentiel" color="info"
+                                    label="Peut consulter les archives confidentielles" class="mt-3" hide-details></v-switch>
+                                    
+                                <v-switch v-model="form.peut_archiver_confidentiel" color="error"
+                                    label="Peut archiver des documents confidentiels" hide-details></v-switch>
+                                
+                                <v-switch v-model="form.peut_valider_confidentiel" color="success"
+                                    label="Peut valider des documents confidentiels" class="mb-2"></v-switch>
+                            </v-window-item>
+                        </v-window>
 
                         <div class="d-flex justify-end mt-4">
                             <v-btn variant="text" @click="editDialog = false">Annuler</v-btn>

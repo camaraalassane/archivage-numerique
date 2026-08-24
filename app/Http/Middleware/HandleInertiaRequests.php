@@ -26,6 +26,9 @@ class HandleInertiaRequests extends Middleware
                     'email' => $request->user()->email,
                     'role' => $request->user()->role, // AJOUT DU RÔLE
                     'role_name' => $request->user()->role_name, // AJOUT DU NOM DU RÔLE
+                    'peut_archiver_confidentiel' => $request->user()->peut_archiver_confidentiel,
+                    'peut_valider_confidentiel' => $request->user()->peut_valider_confidentiel,
+                    'peut_consulter_confidentiel' => $request->user()->peut_consulter_confidentiel,
                 ] : null,
             ],
             // Ajout du nom de l'app pour ton GuestLayout

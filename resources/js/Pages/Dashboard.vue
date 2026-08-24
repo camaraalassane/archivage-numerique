@@ -9,7 +9,8 @@ const props = defineProps({
     treeData: { type: Array, default: () => [] },
     stats: { type: Object, default: () => ({}) },
     user: { type: Object, default: () => ({}) },
-    permissions: { type: Object, default: () => ({}) }
+    permissions: { type: Object, default: () => ({}) },
+    is_confidential_space: { type: Boolean, default: false }
 });
 
 // SNACKBAR
@@ -53,6 +54,20 @@ const currentPath = ref({ annee: null, mois: null, dossier: null });
 const history = ref([]);
 const searchQuery = ref('');
 const statusFilter = ref('all');
+
+// ESPACE CONFIDENTIEL
+const confidentialDialog = ref(false);
+const confidentialForm = useForm({
+    password: ''
+});
+const unlockConfidential = () => {
+    confidentialForm.post(route('confidential.unlock'), {
+        onSuccess: () => {
+            confidentialDialog.value = false;
+            confidentialForm.reset();
+        }
+    });
+};
 
 // ÉTATS POUR LE CHARGEMENT ASYNCHRONE AVEC PAGINATION
 const dossierArchives = ref([]);
@@ -111,6 +126,9 @@ const duplicateFiles = ref([]);
 
 // PERMISSIONS
 const canArchive = computed(() => {
+    if (props.is_confidential_space) {
+        return props.permissions?.can_archive_confidential || false;
+    }
     return props.permissions?.can_manage_dossiers || false;
 });
 
@@ -140,6 +158,7 @@ const form = useForm({
     mots_cles: '',
     fichier: null,
     fichiers: [],
+    type_document_confidentiel: 2,
 });
 
 // FILTRAGE DES DONNÉES
@@ -206,7 +225,11 @@ const enterDossier = async (dossier) => {
 const loadDossierArchives = async (dossierId, page = 1) => {
     isLoadingArchives.value = true;
     try {
-        const response = await axios.get(route('dossiers.archives', dossierId), {
+        const url = props.is_confidential_space 
+            ? route('confidential.dossiers.archives', dossierId) 
+            : route('dossiers.archives', dossierId);
+            
+        const response = await axios.get(url, {
             params: {
                 status: statusFilter.value !== 'all' ? statusFilter.value : null,
                 search: searchQuery.value || null,
@@ -343,6 +366,7 @@ const openUploadDialog = () => {
     form.dossier_id = currentPath.value.dossier.id;
     form.date_document = new Date().toISOString().substr(0, 10);
     form.reference = generateReference();
+    form.type_document_confidentiel = props.is_confidential_space ? 1 : 2;
     uploadDialog.value = true;
 };
 
@@ -362,6 +386,7 @@ const openEditDialog = (file) => {
     form.date_document = file.date_document;
     form.description = file.description || '';
     form.mots_cles = file.mots_cles || '';
+    form.type_document_confidentiel = file.type_document_confidentiel || (props.is_confidential_space ? 1 : 2);
     uploadDialog.value = true;
 };
 
@@ -478,6 +503,7 @@ const submitArchive = async () => {
         formData.append('date_document', form.date_document);
         formData.append('description', form.description || '');
         formData.append('mots_cles', form.mots_cles || '');
+        formData.append('type_document_confidentiel', form.type_document_confidentiel || 2);
 
         form.fichiers.forEach((file, index) => {
             formData.append(`fichiers[${index}]`, file);
@@ -618,8 +644,12 @@ const getFileColor = (ext) => {
 
                 <div class="d-flex align-center bg-grey-lighten-4 rounded-lg px-3 py-1 border flex-grow-1 overflow-hidden"
                     style="max-width: 450px;">
-                    <v-icon size="x-small" color="grey-darken-1" class="mr-1">mdi-pc-tower</v-icon>
-                    <span class="text-caption cursor-pointer hover-text" @click="resetToRoot">Archives</span>
+                    <v-icon size="x-small" :color="props.is_confidential_space ? 'error' : 'grey-darken-1'" class="mr-1">
+                        {{ props.is_confidential_space ? 'mdi-shield-lock' : 'mdi-pc-tower' }}
+                    </v-icon>
+                    <span class="text-caption cursor-pointer hover-text" @click="resetToRoot">
+                        {{ props.is_confidential_space ? 'Espace Confidentiel' : 'Archives' }}
+                    </span>
 
                     <template v-if="currentPath.annee">
                         <v-icon size="x-small">mdi-chevron-right</v-icon>
@@ -647,6 +677,10 @@ const getFileColor = (ext) => {
 
                 <v-spacer></v-spacer>
 
+                <v-btn v-if="props.is_confidential_space" @click="router.post(route('confidential.lock'))" prepend-icon="mdi-lock-outline" variant="tonal" color="error" size="small" class="mr-4 d-none d-sm-flex">
+                    Verrouiller Espace
+                </v-btn>
+
                 <v-text-field v-model="searchQuery" prepend-inner-icon="mdi-magnify" :placeholder="searchPlaceholder"
                     variant="solo-filled" density="compact" hide-details rounded="lg" flat class="mx-4 d-none d-sm-flex"
                     style="max-width: 250px;" clearable></v-text-field>
@@ -667,6 +701,13 @@ const getFileColor = (ext) => {
 
                 <!-- Années -->
                 <v-row v-if="currentView === 'root'" class="align-content-start">
+                    <v-col cols="6" sm="4" md="3" lg="2" v-if="permissions.has_confidential_access && !props.is_confidential_space">
+                        <div class="folder-item bg-teal-lighten-5" @click="confidentialDialog = true">
+                            <v-icon size="80" color="teal-darken-2" class="folder-shadow">mdi-shield-lock-outline</v-icon>
+                            <div class="folder-name text-teal-darken-4">Espace Confidentiel</div>
+                            <div class="text-caption text-teal-darken-3 font-weight-medium">Accès Protégé</div>
+                        </div>
+                    </v-col>
                     <v-col v-for="annee in filteredData" :key="annee.id" cols="6" sm="4" md="3" lg="2">
                         <div class="folder-item" @dblclick="enterAnnee(annee)">
                             <v-icon size="80" color="blue-darken-1" class="folder-shadow">mdi-calendar</v-icon>
@@ -918,6 +959,21 @@ const getFileColor = (ext) => {
                         <div class="text-subtitle-2 font-weight-bold mb-2 text-primary">Informations du document</div>
 
                         <v-row dense>
+                            <!-- NIVEAU DE CONFIDENTIALITE -->
+                            <v-col cols="12" v-if="permissions.can_archive_confidential && !is_confidential_space">
+                                <v-select v-model="form.type_document_confidentiel" 
+                                    :items="[{title: 'Document Ordinaire', value: 2}, {title: 'Document Confidentiel (Protégé)', value: 1}]"
+                                    item-title="title" item-value="value"
+                                    label="Type d'archive" variant="outlined" density="comfortable"
+                                    :error-messages="form.errors.type_document_confidentiel" required>
+                                    <template v-slot:prepend-inner><v-icon color="primary" size="small">mdi-shield-check</v-icon></template>
+                                </v-select>
+                            </v-col>
+                            <v-col cols="12" v-if="is_confidential_space">
+                                <v-alert type="warning" variant="tonal" density="compact" icon="mdi-shield-lock">
+                                    Ce document sera automatiquement archivé comme <strong>Confidentiel</strong> car vous êtes dans l'Espace Confidentiel.
+                                </v-alert>
+                            </v-col>
                             <template v-if="!multipleMode">
                                 <v-col cols="12" md="6">
                                     <v-text-field v-model="form.reference" label="Référence (auto-générée)"
@@ -1151,6 +1207,30 @@ const getFileColor = (ext) => {
                             </tr>
                         </tbody>
                     </v-table>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
+
+        <!-- DIALOGUE MOT DE PASSE CONFIDENTIEL -->
+        <v-dialog v-model="confidentialDialog" max-width="400px">
+            <v-card class="rounded-xl">
+                <v-toolbar color="red-darken-4" flat>
+                    <v-icon start class="ml-4">mdi-shield-lock</v-icon>
+                    <v-toolbar-title class="font-weight-bold text-body-1">Espace Confidentiel</v-toolbar-title>
+                    <v-spacer></v-spacer>
+                    <v-btn icon="mdi-close" variant="text" @click="confidentialDialog = false"></v-btn>
+                </v-toolbar>
+                <v-card-text class="pa-6">
+                    <p class="mb-4 text-body-2">Cet espace est protégé. Veuillez entrer votre mot de passe confidentiel.</p>
+                    <v-form @submit.prevent="unlockConfidential">
+                        <v-text-field v-model="confidentialForm.password" label="Mot de passe" type="password"
+                            variant="outlined" density="comfortable" :error-messages="confidentialForm.errors.password"
+                            required prepend-inner-icon="mdi-lock"></v-text-field>
+                        
+                        <v-btn type="submit" color="red-darken-4" block class="mt-4" rounded="lg" :loading="confidentialForm.processing">
+                            Déverrouiller
+                        </v-btn>
+                    </v-form>
                 </v-card-text>
             </v-card>
         </v-dialog>

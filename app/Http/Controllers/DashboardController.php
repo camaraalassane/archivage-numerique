@@ -33,7 +33,12 @@ class DashboardController extends Controller
                 'mois.dossiers' => function ($query) {
                     $query->orderBy('ordre')
                         ->where('active', true)
-                        ->withCount('archives'); // juste le compteur
+                        ->withCount(['archives' => function($q) {
+                            $q->where(function($sub) {
+                                $sub->where('type_document_confidentiel', '!=', 1)
+                                    ->orWhereNull('type_document_confidentiel');
+                            });
+                        }]);
                 },
             ])
                 ->where('active', true)
@@ -46,7 +51,10 @@ class DashboardController extends Controller
         $cacheKey = "dashboard_stats_user_{$user->id}";
 
         $stats = Cache::remember($cacheKey, 300, function () use ($user, $isArchiviste, $isDivision) {
-            $baseQuery = Archive::query();
+            $baseQuery = Archive::query()->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
             if ($isArchiviste) {
                 $baseQuery->where('created_by', $user->id);
             } elseif ($isDivision) {
@@ -56,12 +64,20 @@ class DashboardController extends Controller
             $totalArchives = $baseQuery->count();
 
             $archivesParType = Archive::selectRaw('type_document, count(*) as total')
+                ->where(function($q) {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                })
                 ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
                 ->when($isDivision, fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
                 ->groupBy('type_document')
                 ->pluck('total', 'type_document');
 
             $statutCounts = Archive::selectRaw('validation_status, count(*) as total')
+                ->where(function($q) {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                })
                 ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
                 ->groupBy('validation_status')
                 ->pluck('total', 'validation_status');
@@ -79,13 +95,16 @@ class DashboardController extends Controller
         $archivesParType = $stats['archivesParType'];
         $archivesParStatut = $stats['archivesParStatut'];
 
-        // Archives récentes (limitées)
         $recentArchives = Archive::with([
             'dossier:id,nom,mois_id',
             'dossier.mois:id,nom_mois,annee_id',
             'dossier.mois.annee:id,annee',
             'createur:id,name',
         ])
+            ->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            })
             ->when($isArchiviste, fn($q) => $q->where('created_by', $user->id))
             ->when($isDivision, fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
             ->latest('id')
@@ -126,6 +145,10 @@ class DashboardController extends Controller
                 now()->startOfWeek(),
                 now()->endOfWeek(),
             ])
+                ->where(function($q) {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                })
                 ->where('created_by', $user->id)
                 ->first();
 
@@ -149,7 +172,12 @@ class DashboardController extends Controller
                 Archive::STATUS_REJECTED,
                 now()->month,
                 now()->year,
-            ])->first();
+            ])
+                ->where(function($q) {
+                    $q->where('type_document_confidentiel', '!=', 1)
+                      ->orWhereNull('type_document_confidentiel');
+                })
+                ->first();
 
             $archivistesActifs = Archive::whereMonth('created_at', now()->month)
                 ->whereYear('created_at', now()->year)
@@ -191,6 +219,8 @@ class DashboardController extends Controller
                 'is_gestionnaire' => $isGestionnaire,
                 'is_admin' => $isAdmin,
                 'can_modify_archives' => $isArchiviste || $isGestionnaire || $isAdmin,
+                'can_archive_confidential' => $user->canArchiveConfidential(),
+                'has_confidential_access' => $user->hasConfidentialPasswordSetup() || $user->canArchiveConfidential() || $user->isAdmin(),
             ]
         ]);
     }
@@ -208,7 +238,11 @@ class DashboardController extends Controller
             'dossier.mois.annee:id,annee',
             'createur:id,name',
         ])
-        ->where('dossier_id', $dossier->id);
+        ->where('dossier_id', $dossier->id)
+        ->where(function($q) {
+            $q->where('type_document_confidentiel', '!=', 1)
+              ->orWhereNull('type_document_confidentiel');
+        });
 
         // Filtrer selon le rôle
         if ($user->isArchiviste()) {
@@ -269,6 +303,10 @@ class DashboardController extends Controller
             'dossier.mois.annee:id,annee',
             'createur:id,name',
         ])
+            ->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            })
             ->when($user->isArchiviste(), fn($q) => $q->where('created_by', $user->id))
             ->when($user->isDivision(), fn($q) => $q->where('validation_status', Archive::STATUS_VALIDATED))
             ->where(function ($q) use ($search) {

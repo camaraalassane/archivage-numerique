@@ -14,18 +14,49 @@ use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 class ArchiveController extends Controller
 {
+    private function invalidateCaches(): void
+    {
+        Cache::forget('dashboard_tree_data');
+        Cache::forget('stats_global');
+        Cache::forget('distinct_archive_types');
+    }
+
     public function index(Request $request)
     {
         $user = Auth::user();
 
         $query = Archive::query()
-            ->with(['dossier.mois.annee', 'createur', 'validateur']);
+            ->with([
+                'dossier:id,nom,mois_id,couleur',
+                'dossier.mois:id,nom_mois,annee_id,mois',
+                'dossier.mois.annee:id,annee',
+                'createur:id,name',
+                'validateur:id,name'
+            ]);
+
+        $tab = $request->input('tab', 'ordinaire');
+
+        if ($tab === 'confidentiel') {
+            $query->where('type_document_confidentiel', 1);
+            if (!$user->canViewConfidential()) {
+                $query->where('id', 0);
+            }
+        } else {
+            $query->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
+        }
 
         if ($user->isArchiviste()) {
-            $query->where('created_by', $user->id);
+            $query->where(function($q) use ($user) {
+                $q->where('validation_status', Archive::STATUS_VALIDATED)
+                  ->orWhere('created_by', $user->id);
+            });
         } else if ($user->isDivision()) {
             $query->where('validation_status', Archive::STATUS_VALIDATED);
         }
@@ -46,11 +77,15 @@ class ArchiveController extends Controller
         ->when($request->date_debut, fn($q, $dd) => $q->whereDate('date_document', '>=', $dd))
         ->when($request->date_fin, fn($q, $df) => $q->whereDate('date_document', '<=', $df));
 
+        $typeDocuments = Cache::remember('distinct_archive_types', 300, function () {
+            return Archive::select('type_document')->distinct()->pluck('type_document');
+        });
+
         return Inertia::render('Archives/Index', [
-            'filters' => $request->all(['search', 'dossier_id', 'type', 'date_debut', 'date_fin', 'validation_status']),
+            'filters' => $request->all(['search', 'dossier_id', 'type', 'date_debut', 'date_fin', 'validation_status', 'tab']),
             'archives' => $query->latest('id')->paginate(50)->withQueryString(),
             'dossiers' => Dossier::with(['mois.annee'])->orderBy('nom')->get(['id', 'nom', 'mois_id', 'couleur']),
-            'type_documents' => Archive::select('type_document')->distinct()->pluck('type_document'),
+            'type_documents' => $typeDocuments,
             'annees' => DossierAnnee::where('active', true)->orderBy('annee', 'desc')->get(['id', 'annee']),
             'mois' => DossierMois::with('annee')->where('active', true)->orderBy('mois')->get(['id', 'annee_id', 'mois', 'nom_mois']),
             'user' => $user,
@@ -172,6 +207,8 @@ class ArchiveController extends Controller
 
         ActivityLog::log('archive_validated', "A validé le document {$archive->reference} : {$archive->titre} (Statut: {$request->status})");
 
+        $this->invalidateCaches();
+
         $statusLabel = $request->status === 'validated' ? 'validée' : 'rejetée';
         return redirect()->back()->with('success', "Archive {$statusLabel} avec succès.");
     }
@@ -210,7 +247,13 @@ class ArchiveController extends Controller
                 'fichier' => 'required|file|max:20480',
                 'mots_cles' => 'nullable|string|max:255',
                 'description' => 'nullable|string',
+                'type_document_confidentiel' => 'nullable|in:1,2',
             ]);
+
+            $typeConfidentiel = $validated['type_document_confidentiel'] ?? 2;
+            if ($typeConfidentiel == 1 && !$user->canArchiveConfidential()) {
+                abort(403, 'Vous n\'avez pas les droits pour archiver des documents confidentiels.');
+            }
 
             $reference = $validated['reference'];
             $dossierId = $validated['dossier_id'];
@@ -242,8 +285,9 @@ class ArchiveController extends Controller
 
             $file = $request->file('fichier');
 
-            $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
-            $path = $file->store($chemin, 'archives');
+            $baseDir = $typeConfidentiel == 1 ? 'archives_confidentielles' : 'archives';
+            $chemin = "{$baseDir}/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
+            $path = $file->store($chemin, 'public');
 
             if (!$path) {
                 return redirect()->back()->with('error', 'Erreur lors du stockage du fichier.');
@@ -257,6 +301,7 @@ class ArchiveController extends Controller
                 'description' => $request->description,
                 'dossier_id' => $request->dossier_id,
                 'type_document' => $file->getClientOriginalExtension(),
+                'type_document_confidentiel' => $typeConfidentiel,
                 'fichier_path' => $path,
                 'fichier_nom_original' => $file->getClientOriginalName(),
                 'fichier_taille' => $file->getSize(),
@@ -272,6 +317,8 @@ class ArchiveController extends Controller
             ]);
 
             ActivityLog::log('archive_created', "A archivé le document {$archive->reference} : {$archive->titre}");
+
+            $this->invalidateCaches();
 
             return redirect()->back()->with('success', 'Document archivé avec succès. En attente de validation.');
 
@@ -310,7 +357,13 @@ class ArchiveController extends Controller
                 'references.*' => 'nullable|string|max:50',
                 'description' => 'nullable|string',
                 'mots_cles' => 'nullable|string|max:255',
+                'type_document_confidentiel' => 'nullable|in:1,2',
             ]);
+
+            $typeConfidentiel = $validated['type_document_confidentiel'] ?? 2;
+            if ($typeConfidentiel == 1 && !$user->canArchiveConfidential()) {
+                abort(403, 'Vous n\'avez pas les droits pour archiver des documents confidentiels.');
+            }
 
             $dossier = Dossier::with(['mois.annee'])->find($request->dossier_id);
             if (!$dossier) {
@@ -367,8 +420,9 @@ class ArchiveController extends Controller
                 $reference = substr($reference, 0, 50);
 
                 try {
-                    $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
-                    $path = $file->store($chemin, 'archives');
+                    $baseDir = $typeConfidentiel == 1 ? 'archives_confidentielles' : 'archives';
+                    $chemin = "{$baseDir}/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
+                    $path = $file->store($chemin, 'public');
 
                     $archive = Archive::create([
                         'titre' => pathinfo($originalName, PATHINFO_FILENAME),
@@ -376,6 +430,7 @@ class ArchiveController extends Controller
                         'description' => $request->description,
                         'dossier_id' => $dossier->id,
                         'type_document' => $file->getClientOriginalExtension(),
+                        'type_document_confidentiel' => $typeConfidentiel,
                         'fichier_path' => $path,
                         'fichier_nom_original' => $originalName,
                         'fichier_taille' => $file->getSize(),
@@ -397,6 +452,10 @@ class ArchiveController extends Controller
                     $errors++;
                     $errorDetails[] = $originalName . ' : ' . $e->getMessage();
                 }
+            }
+
+            if ($imported > 0) {
+                $this->invalidateCaches();
             }
 
             $message = $imported . ' fichier(s) archivé(s) avec succès. En attente de validation.';
@@ -458,6 +517,8 @@ class ArchiveController extends Controller
 
             ActivityLog::log('archive_updated', "A modifié le document {$archive->reference} : {$archive->titre}");
 
+            $this->invalidateCaches();
+
             return redirect()->back()->with('success', 'Document mis à jour avec succès');
 
         } catch (\Exception $e) {
@@ -468,6 +529,11 @@ class ArchiveController extends Controller
 
     public function download(Archive $archive): StreamedResponse
     {
+        $user = Auth::user();
+        if ($archive->type_document_confidentiel == 1 && !$user->canViewConfidential() && $archive->created_by !== $user->id) {
+            abort(403, 'Vous n\'avez pas les droits pour télécharger une archive confidentielle.');
+        }
+
         $path = Storage::disk('archives')->path($archive->fichier_path);
         $stream = @fopen($path, 'r');
         
@@ -485,6 +551,11 @@ class ArchiveController extends Controller
 
     public function viewFile(Archive $archive)
     {
+        $user = Auth::user();
+        if ($archive->type_document_confidentiel == 1 && !$user->canViewConfidential() && $archive->created_by !== $user->id) {
+            abort(403, 'Vous n\'avez pas les droits pour visualiser une archive confidentielle.');
+        }
+
         $path = Storage::disk('archives')->path($archive->fichier_path);
         $stream = @fopen($path, 'r');
         
@@ -517,6 +588,8 @@ class ArchiveController extends Controller
             $titre = $archive->titre;
 
             $archive->delete();
+
+            $this->invalidateCaches();
 
             ActivityLog::log('archive_deleted', "A supprimé le document {$reference} : {$titre}");
 
@@ -581,14 +654,14 @@ class ArchiveController extends Controller
                     fputcsv($file, [
                         $archive->reference,
                         $archive->titre,
-                        $archive->dossier->mois->annee->annee ?? 'N/A',
-                        $archive->dossier->mois->nom_mois ?? 'N/A',
-                        $archive->dossier->nom ?? 'N/A',
+                        $archive->dossier?->mois?->annee?->annee ?? 'N/A',
+                        $archive->dossier?->mois?->nom_mois ?? 'N/A',
+                        $archive->dossier?->nom ?? 'N/A',
                         $archive->date_document,
                         $archive->type_document,
                         $archive->mots_cles,
                         $archive->status_label,
-                        $archive->validateur->name ?? 'N/A',
+                        $archive->validateur?->name ?? 'N/A',
                         $archive->validated_at ?? 'N/A',
                     ], ';');
                 }
@@ -653,8 +726,9 @@ class ArchiveController extends Controller
                     return redirect()->back()->with('error', 'Impossible : cette année est clôturée.');
                 }
 
-                $chemin = "archives/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
-                $path = $file->store($chemin, 'archives');
+                $baseDir = $archive->type_document_confidentiel == 1 ? 'archives_confidentielles' : 'archives';
+                $chemin = "{$baseDir}/{$dossier->mois->annee->annee}/{$dossier->mois->mois}/{$dossier->nom}";
+                $path = $file->store($chemin, 'public');
 
                 $archive->update([
                     'fichier_path' => $path,
@@ -664,6 +738,8 @@ class ArchiveController extends Controller
                     'version' => $newVersion,
                     'type_document' => $file->getClientOriginalExtension(),
                 ]);
+
+                $this->invalidateCaches();
 
                 return redirect()->back()->with('success', 'Nouvelle version ajoutée (v' . $newVersion . ')');
             }

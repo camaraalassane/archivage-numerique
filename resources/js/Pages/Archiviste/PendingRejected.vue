@@ -259,7 +259,10 @@ const getFileIcon = (type) => {
                 </thead>
                 <tbody>
                     <tr v-for="archive in archives.data" :key="archive.id">
-                        <td class="font-weight-bold text-primary">{{ archive.reference }}</td>
+                        <td class="font-weight-bold text-primary">
+                            {{ archive.reference }}
+                            <v-icon v-if="archive.type_document_confidentiel == 1" color="error" size="x-small" title="Confidentiel" class="ml-1">mdi-shield-lock</v-icon>
+                        </td>
                         <td>{{ archive.titre }}</td>
                         <td>
                             <v-chip size="x-small" color="primary" variant="tonal">

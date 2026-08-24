@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 class DossierController extends Controller
 {
@@ -47,7 +48,13 @@ class DossierController extends Controller
             'createur:id,name',
             'validateur:id,name',
         ])
-            ->where('dossier_id', $dossier->id);
+            ->where('dossier_id', $dossier->id)
+            ->where(function($q) {
+                $q->where(function($sub) {
+                    $sub->where('type_document_confidentiel', '!=', 1)
+                        ->orWhereNull('type_document_confidentiel');
+                });
+            });
 
         // Archiviste et Division : uniquement les archives validées
         if ($user->isArchiviste() || $user->isDivision()) {
@@ -121,6 +128,8 @@ class DossierController extends Controller
             }
 
             $dossier = Dossier::create($validated);
+
+            Cache::forget('dashboard_tree_data');
 
             ActivityLog::log('dossier_created', "A créé le dossier {$dossier->nom} ({$dossier->code})");
 
@@ -215,6 +224,7 @@ class DossierController extends Controller
             if (!empty($errors)) $message .= '. Erreurs: ' . implode(', ', $errors);
 
             if ($createdCount > 0) {
+                Cache::forget('dashboard_tree_data');
                 ActivityLog::log('dossier_batch_created', "A importé en masse {$createdCount} dossiers");
             }
 
@@ -256,6 +266,8 @@ class DossierController extends Controller
 
             $dossier->update($validated);
 
+            Cache::forget('dashboard_tree_data');
+
             ActivityLog::log('dossier_updated', "A modifié le dossier {$dossier->nom} ({$dossier->code})");
 
             return redirect()->back()->with('success', 'Dossier mis à jour avec succès !');
@@ -282,6 +294,8 @@ class DossierController extends Controller
             $code = $dossier->code;
             $dossier->delete();
             
+            Cache::forget('dashboard_tree_data');
+
             ActivityLog::log('dossier_deleted', "A supprimé le dossier {$nom} ({$code})");
             
             return redirect()->back()->with('success', 'Dossier supprimé avec succès.');
@@ -313,6 +327,8 @@ class DossierController extends Controller
             $dossier->active = !$dossier->active;
             $dossier->save();
             
+            Cache::forget('dashboard_tree_data');
+
             $statut = $dossier->active ? 'activé' : 'désactivé';
             ActivityLog::log('dossier_updated', "A {$statut} le dossier {$dossier->nom}");
 

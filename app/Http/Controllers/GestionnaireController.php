@@ -10,9 +10,16 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Illuminate\Support\Facades\Cache;
 
 class GestionnaireController extends Controller
 {
+    private function invalidateCaches(): void
+    {
+        Cache::forget('dashboard_tree_data');
+        Cache::forget('stats_global');
+        Cache::forget('distinct_archive_types');
+    }
     public function pendingArchives(Request $request)
     {
         $user = Auth::user();
@@ -23,6 +30,13 @@ class GestionnaireController extends Controller
 
         $query = Archive::with(['dossier.mois.annee', 'createur', 'validateur'])
             ->where('validation_status', Archive::STATUS_PENDING);
+
+        if (!$user->canValidateConfidential() && !$user->isAdmin()) {
+            $query->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
+        }
 
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($sub) use ($search) {
@@ -60,12 +74,18 @@ class GestionnaireController extends Controller
             'comment' => 'nullable|string|max:500',
         ]);
 
+        if ($archive->type_document_confidentiel == 1 && !$user->canValidateConfidential() && !$user->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour valider une archive confidentielle.');
+        }
+
         $archive->update([
             'validation_status' => Archive::STATUS_VALIDATED,
             'validated_by' => $user->id,
             'validated_at' => now(),
             'validation_comment' => $request->comment ?? 'Validé par le gestionnaire',
         ]);
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', 'Archive validée avec succès.');
     }
@@ -82,12 +102,18 @@ class GestionnaireController extends Controller
             'comment' => 'required|string|max:500',
         ]);
 
+        if ($archive->type_document_confidentiel == 1 && !$user->canValidateConfidential() && !$user->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour rejeter une archive confidentielle.');
+        }
+
         $archive->update([
             'validation_status' => Archive::STATUS_REJECTED,
             'validated_by' => $user->id,
             'validated_at' => now(),
             'validation_comment' => $request->comment,
         ]);
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', 'Archive rejetée avec succès.');
     }
@@ -105,14 +131,24 @@ class GestionnaireController extends Controller
             'ids.*' => 'integer|exists:archives,id',
         ]);
 
-        $count = Archive::whereIn('id', $request->ids)
-            ->where('validation_status', Archive::STATUS_PENDING)
-            ->update([
+        $query = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING);
+
+        if (!$user->canValidateConfidential() && !$user->isAdmin()) {
+            $query->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
+        }
+
+        $count = $query->update([
                 'validation_status' => Archive::STATUS_VALIDATED,
                 'validated_by' => $user->id,
                 'validated_at' => now(),
                 'validation_comment' => 'Validé en masse par le gestionnaire',
             ]);
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', "{$count} archive(s) validée(s) avec succès.");
     }
@@ -131,14 +167,24 @@ class GestionnaireController extends Controller
             'comment' => 'nullable|string|max:500',
         ]);
 
-        $count = Archive::whereIn('id', $request->ids)
-            ->where('validation_status', Archive::STATUS_PENDING)
-            ->update([
+        $query = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING);
+
+        if (!$user->canValidateConfidential() && !$user->isAdmin()) {
+            $query->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
+        }
+
+        $count = $query->update([
                 'validation_status' => Archive::STATUS_REJECTED,
                 'validated_by' => $user->id,
                 'validated_at' => now(),
                 'validation_comment' => $request->comment ?? 'Rejeté en masse par le gestionnaire',
             ]);
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', "{$count} archive(s) rejetée(s).");
     }
@@ -156,9 +202,17 @@ class GestionnaireController extends Controller
             'ids.*' => 'integer|exists:archives,id',
         ]);
 
-        $archives = Archive::whereIn('id', $request->ids)
-            ->where('validation_status', Archive::STATUS_PENDING)
-            ->get();
+        $query = Archive::whereIn('id', $request->ids)
+            ->where('validation_status', Archive::STATUS_PENDING);
+
+        if (!$user->canValidateConfidential() && !$user->isAdmin()) {
+            $query->where(function($q) {
+                $q->where('type_document_confidentiel', '!=', 1)
+                  ->orWhereNull('type_document_confidentiel');
+            });
+        }
+
+        $archives = $query->get();
 
         $count = 0;
         foreach ($archives as $archive) {
@@ -168,6 +222,8 @@ class GestionnaireController extends Controller
             $archive->delete();
             $count++;
         }
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', "{$count} archive(s) supprimée(s) avec succès.");
     }
@@ -180,11 +236,17 @@ class GestionnaireController extends Controller
             abort(403, 'Vous n\'avez pas les droits pour supprimer cette archive.');
         }
 
+        if ($archive->type_document_confidentiel == 1 && !$user->canValidateConfidential() && !$user->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour supprimer une archive confidentielle.');
+        }
+
         if ($archive->fichier_path && Storage::disk('archives')->exists($archive->fichier_path)) {
             Storage::disk('archives')->delete($archive->fichier_path);
         }
 
         $archive->delete();
+
+        $this->invalidateCaches();
 
         return redirect()->back()->with('success', 'Archive supprimée avec succès.');
     }
@@ -195,6 +257,10 @@ class GestionnaireController extends Controller
 
         if (!$user->isGestionnaire()) {
             abort(403, 'Vous n\'avez pas les droits pour visualiser ce document.');
+        }
+
+        if ($archive->type_document_confidentiel == 1 && !$user->canValidateConfidential() && !$user->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour visualiser une archive confidentielle.');
         }
 
         if (!Storage::disk('archives')->exists($archive->fichier_path)) {
@@ -210,6 +276,10 @@ class GestionnaireController extends Controller
 
         if (!$user->isGestionnaire()) {
             abort(403, 'Vous n\'avez pas les droits pour télécharger ce document.');
+        }
+
+        if ($archive->type_document_confidentiel == 1 && !$user->canValidateConfidential() && !$user->isAdmin()) {
+            abort(403, 'Vous n\'avez pas les droits pour télécharger une archive confidentielle.');
         }
 
         if (!Storage::disk('archives')->exists($archive->fichier_path)) {

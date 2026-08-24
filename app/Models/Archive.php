@@ -36,6 +36,7 @@ class Archive extends Model
         'validated_by',
         'validated_at',
         'validation_comment',
+        'type_document_confidentiel',
     ];
 
     protected $casts = [
@@ -83,6 +84,11 @@ class Archive extends Model
     public function canBeValidated(): bool
     {
         return $this->isPending();
+    }
+
+    public function isConfidential(): bool
+    {
+        return $this->type_document_confidentiel === 1;
     }
 
     // ==============================================
@@ -266,22 +272,5 @@ class Archive extends Model
             $i++;
         }
         return round($bytes, 2) . ' ' . $units[$i];
-    }
-
-    protected static function booted()
-    {
-        static::saved(function ($model) {
-            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
-            if (auth()->check()) {
-                \Illuminate\Support\Facades\Cache::forget('dashboard_stats_user_' . auth()->id());
-            }
-        });
-
-        static::deleted(function ($model) {
-            \Illuminate\Support\Facades\Cache::forget('dashboard_tree_data');
-            if (auth()->check()) {
-                \Illuminate\Support\Facades\Cache::forget('dashboard_stats_user_' . auth()->id());
-            }
-        });
     }
 }
