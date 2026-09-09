@@ -68,6 +68,14 @@ const editForm = useForm({
     fichier: null,
 });
 
+const flatDossiers = computed(() => {
+    return props.dossiers.map(d => ({
+        id: d.id,
+        title: d.mois?.annee?.annee ? `${d.mois.annee.annee} / ${d.mois.nom_mois} / ${d.nom}` : d.nom,
+        couleur: d.couleur
+    }));
+});
+
 const openEditDialog = (archive) => {
     editingArchive.value = archive;
     editForm.titre = archive.titre;
@@ -337,18 +345,18 @@ const getFileIcon = (type) => {
                         <v-text-field v-model="editForm.reference" label="Référence" variant="outlined"
                             density="comfortable" :error-messages="editForm.errors.reference" required></v-text-field>
 
-                        <v-select v-model="editForm.dossier_id" :items="dossiers" item-title="nom" item-value="id"
+                        <v-autocomplete v-model="editForm.dossier_id" :items="flatDossiers" item-title="title" item-value="id"
                             label="Dossier" variant="outlined" density="comfortable"
                             :error-messages="editForm.errors.dossier_id" required>
                             <template v-slot:item="{ item, props: itemProps }">
                                 <v-list-item v-bind="itemProps">
                                     <div class="d-flex align-center">
-                                        <v-icon :color="item.raw.couleur" size="20" class="mr-2">mdi-folder</v-icon>
+                                        <v-icon :color="item.raw.couleur" class="mr-2">mdi-folder</v-icon>
                                         {{ item.title }}
                                     </div>
                                 </v-list-item>
                             </template>
-                        </v-select>
+                        </v-autocomplete>
 
                         <v-text-field v-model="editForm.date_document" label="Date du document" type="date"
                             variant="outlined" density="comfortable" :error-messages="editForm.errors.date_document"

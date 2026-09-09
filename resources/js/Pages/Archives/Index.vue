@@ -1,6 +1,6 @@
 <!-- resources/js/Pages/Archives/Index.vue -->
 <script setup>
-import { ref, computed, watch, reactive } from 'vue';
+import { ref, computed, watch, reactive, nextTick } from 'vue';
 import { useForm, Head, router } from '@inertiajs/vue3';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import debounce from 'lodash/debounce';
@@ -124,10 +124,17 @@ const filterDateDebut = ref(props.filters?.date_debut || null);
 const filterDateFin = ref(props.filters?.date_fin || null);
 
 // État du formulaire
+const isInitializing = ref(false);
 const selectedAnneeId = ref(null);
 const selectedMoisId = ref(null);
-const availableMois = ref([]);
-const availableDossiers = ref([]);
+const availableMois = computed(() => {
+    if (!selectedAnneeId.value) return [];
+    return props.mois.filter(m => m.annee_id == selectedAnneeId.value);
+});
+const availableDossiers = computed(() => {
+    if (!selectedMoisId.value) return [];
+    return props.dossiers.filter(d => d.mois_id == selectedMoisId.value);
+});
 const folderFiles = ref([]);
 const folderFilesInfo = ref([]);
 
@@ -147,9 +154,9 @@ const form = useForm({
 const generateReference = () => {
     if (!selectedAnneeId.value || !selectedMoisId.value || !form.dossier_id) return '';
 
-    const annee = props.annees.find(a => a.id === selectedAnneeId.value);
-    const moisItem = props.mois.find(m => m.id === selectedMoisId.value);
-    const dossier = props.dossiers.find(d => d.id === form.dossier_id);
+    const annee = props.annees.find(a => a.id == selectedAnneeId.value);
+    const moisItem = props.mois.find(m => m.id == selectedMoisId.value);
+    const dossier = props.dossiers.find(d => d.id == form.dossier_id);
 
     if (!annee || !moisItem || !dossier) return '';
 
@@ -166,27 +173,17 @@ const updateReference = () => {
 };
 
 // Watchers
-watch(selectedAnneeId, (newAnneeId) => {
-    if (newAnneeId) {
-        availableMois.value = props.mois.filter(m => m.annee_id === newAnneeId);
+watch(selectedAnneeId, (newAnneeId, oldAnneeId) => {
+    if (isInitializing.value) return;
+    if (oldAnneeId !== undefined && newAnneeId !== oldAnneeId) {
         selectedMoisId.value = null;
         form.dossier_id = null;
-        availableDossiers.value = [];
-    } else {
-        availableMois.value = [];
-        selectedMoisId.value = null;
-        form.dossier_id = null;
-        availableDossiers.value = [];
     }
 });
 
-watch(selectedMoisId, (newMoisId) => {
-    if (newMoisId) {
-        availableDossiers.value = props.dossiers.filter(d => d.mois_id === newMoisId);
-        form.dossier_id = null;
-        form.reference = '';
-    } else {
-        availableDossiers.value = [];
+watch(selectedMoisId, (newMoisId, oldMoisId) => {
+    if (isInitializing.value) return;
+    if (oldMoisId !== undefined && newMoisId !== oldMoisId) {
         form.dossier_id = null;
         form.reference = '';
     }
@@ -288,6 +285,7 @@ const openCreateDialog = () => {
         showNotify('Vous n\'avez pas les droits pour créer des archives.', 'error');
         return;
     }
+    isInitializing.value = true;
     isEditing.value = false;
     editingId.value = null;
     multipleMode.value = false;
@@ -300,8 +298,6 @@ const openCreateDialog = () => {
     form.clearErrors();
     selectedAnneeId.value = null;
     selectedMoisId.value = null;
-    availableMois.value = [];
-    availableDossiers.value = [];
     form.dossier_id = null;
     form.reference = '';
     form.fichier = null;
@@ -309,13 +305,17 @@ const openCreateDialog = () => {
     form.type_document_confidentiel = 2;
     form.date_document = new Date().toISOString().substr(0, 10);
     dialog.value = true;
+    nextTick(() => {
+        isInitializing.value = false;
+    });
 };
 
-const openEditDialog = (archive) => {
+const openEditDialog = async (archive) => {
     if (!canEdit.value) {
         showNotify('Vous n\'avez pas les droits pour modifier ce document.', 'error');
         return;
     }
+    isInitializing.value = true;
     isEditing.value = true;
     editingId.value = archive.id;
     multipleMode.value = false;
@@ -326,24 +326,34 @@ const openEditDialog = (archive) => {
     duplicateFiles.value = [];
     form.titre = archive.titre;
     form.reference = archive.reference;
-    form.dossier_id = archive.dossier_id;
     form.date_document = archive.date_document;
     form.description = archive.description || '';
     form.mots_cles = archive.mots_cles || '';
     form.type_document_confidentiel = archive.type_document_confidentiel || 2;
     form.clearErrors();
 
-    const dossier = props.dossiers.find(d => d.id === archive.dossier_id);
+    const dossier = props.dossiers.find(d => d.id == archive.dossier_id) || archive.dossier;
     if (dossier) {
-        selectedMoisId.value = dossier.mois_id;
-        const moisItem = props.mois.find(m => m.id === dossier.mois_id);
+        const moisId = dossier.mois_id || dossier.mois?.id;
+        const moisItem = props.mois.find(m => m.id == moisId) || dossier.mois;
         if (moisItem) {
-            selectedAnneeId.value = moisItem.annee_id;
-            availableMois.value = props.mois.filter(m => m.annee_id === moisItem.annee_id);
-            availableDossiers.value = props.dossiers.filter(d => d.mois_id === dossier.mois_id);
+            const anneeId = moisItem.annee_id || moisItem.annee?.id;
+            selectedAnneeId.value = anneeId;
+            selectedMoisId.value = moisId;
+            form.dossier_id = archive.dossier_id;
+        } else {
+            selectedAnneeId.value = null;
+            selectedMoisId.value = null;
+            form.dossier_id = archive.dossier_id;
         }
+    } else {
+        selectedAnneeId.value = null;
+        selectedMoisId.value = null;
+        form.dossier_id = null;
     }
     dialog.value = true;
+    await nextTick();
+    isInitializing.value = false;
 };
 
 const onMultipleModeChange = (val) => {
@@ -517,6 +527,7 @@ const submit = async () => {
 };
 
 const resetForm = () => {
+    isInitializing.value = true;
     form.reset();
     form.clearErrors();
     multipleMode.value = false;
@@ -527,6 +538,9 @@ const resetForm = () => {
     duplicateFiles.value = [];
     selectedAnneeId.value = null;
     selectedMoisId.value = null;
+    nextTick(() => {
+        isInitializing.value = false;
+    });
 };
 
 const deleteArchive = (id) => {
@@ -787,7 +801,7 @@ const formatSize = (bytes) => {
                                 <v-col cols="12" md="4">
                                     <v-select v-model="selectedAnneeId" :items="annees" item-title="annee"
                                         item-value="id" label="1. Choisir l'année" variant="outlined"
-                                        density="comfortable" :disabled="isEditing" required>
+                                        density="comfortable" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-calendar</v-icon></template>
                                     </v-select>
@@ -795,7 +809,7 @@ const formatSize = (bytes) => {
                                 <v-col cols="12" md="4">
                                     <v-select v-model="selectedMoisId" :items="availableMois" item-title="nom_mois"
                                         item-value="id" label="2. Choisir le mois" variant="outlined"
-                                        density="comfortable" :disabled="!selectedAnneeId || isEditing" required>
+                                        density="comfortable" :disabled="!selectedAnneeId" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-calendar-month</v-icon></template>
                                     </v-select>
@@ -803,7 +817,7 @@ const formatSize = (bytes) => {
                                 <v-col cols="12" md="4">
                                     <v-select v-model="form.dossier_id" :items="availableDossiers" item-title="nom"
                                         item-value="id" label="3. Choisir le dossier" variant="outlined"
-                                        density="comfortable" :disabled="!selectedMoisId || isEditing"
+                                        density="comfortable" :disabled="!selectedMoisId"
                                         :error-messages="form.errors.dossier_id" required>
                                         <template v-slot:prepend-inner><v-icon color="primary"
                                                 size="small">mdi-folder</v-icon></template>

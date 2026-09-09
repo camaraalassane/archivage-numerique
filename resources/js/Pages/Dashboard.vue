@@ -161,6 +161,29 @@ const form = useForm({
     type_document_confidentiel: 2,
 });
 
+// LISTE PLATE DES DOSSIERS POUR LE SELECTEUR (MODIFICATION)
+const flatDossiers = computed(() => {
+    let list = [];
+    if (props.treeData) {
+        props.treeData.forEach(annee => {
+            if (annee.mois) {
+                annee.mois.forEach(mois => {
+                    if (mois.dossiers) {
+                        mois.dossiers.forEach(d => {
+                            list.push({
+                                id: d.id,
+                                title: `${annee.annee} / ${mois.nom_mois} / ${d.nom}`,
+                                couleur: d.couleur
+                            });
+                        });
+                    }
+                });
+            }
+        });
+    }
+    return list;
+});
+
 // FILTRAGE DES DONNÉES
 const filteredData = computed(() => {
     const q = searchQuery.value?.toLowerCase() || '';
@@ -890,7 +913,28 @@ const getFileColor = (ext) => {
                 <v-divider></v-divider>
 
                 <v-card-text class="pa-6" style="max-height: 60vh; overflow-y: auto;">
-                    <div class="mb-4 pa-3 bg-grey-lighten-4 rounded-lg" v-if="currentPath.dossier">
+                    <template v-if="isEditing">
+                        <v-autocomplete
+                            v-model="form.dossier_id"
+                            :items="flatDossiers"
+                            item-title="title"
+                            item-value="id"
+                            label="Dossier de destination"
+                            variant="outlined"
+                            density="comfortable"
+                            prepend-inner-icon="mdi-folder-move"
+                            class="mb-4"
+                        >
+                            <template v-slot:item="{ props, item }">
+                                <v-list-item v-bind="props">
+                                    <template v-slot:prepend>
+                                        <v-icon :color="item.raw.couleur || 'grey'">mdi-folder</v-icon>
+                                    </template>
+                                </v-list-item>
+                            </template>
+                        </v-autocomplete>
+                    </template>
+                    <div class="mb-4 pa-3 bg-grey-lighten-4 rounded-lg" v-else-if="currentPath.dossier">
                         <div class="text-caption text-grey">Dossier de destination</div>
                         <div class="font-weight-bold">
                             <v-icon :color="currentPath.dossier.couleur" size="small" class="mr-1">mdi-folder</v-icon>
