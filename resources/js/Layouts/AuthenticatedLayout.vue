@@ -44,11 +44,11 @@ const canManageUsers = computed(() => isAdmin.value);
 // Import : uniquement Admin
 const canImport = computed(() => isAdmin.value);
 
-// Archivage : accessible à tous sauf Division
-const canViewArchives = computed(() => !isDivision.value);
+// Archivage : accessible à tous
+const canViewArchives = computed(() => true);
 
-// Statistiques : accessible à tous sauf Division
-const canViewStats = computed(() => !isDivision.value);
+// Statistiques : accessible à tous
+const canViewStats = computed(() => true);
 
 // Archives en attente/rejetées : UNIQUEMENT Archiviste
 const canViewPendingRejected = computed(() => isArchiviste.value);
@@ -131,8 +131,7 @@ const logout = () => {
                 </v-btn>
 
                 <template v-slot:extension>
-                    <!-- Si Division : pas de tabs, que le Dashboard -->
-                    <v-tabs v-if="!isDivision" :model-value="currentPage" align-tabs="title" color="yellow-accent-4"
+                    <v-tabs :model-value="currentPage" align-tabs="title" color="yellow-accent-4"
                         slider-color="yellow-accent-4">
                         <!-- Dashboard : accessible à tous -->
                         <v-tab value="Dashboard" :tag="Link" :href="route('dashboard')">
@@ -154,7 +153,7 @@ const logout = () => {
                             <v-icon start>mdi-folder-multiple</v-icon> Dossiers
                         </v-tab>
 
-                        <!-- Archives : accessible à tous sauf Division -->
+                        <!-- Archives : accessible à tous -->
                         <v-tab v-if="canViewArchives" value="Archives" :tag="Link" :href="route('archives.index')">
                             <v-icon start>mdi-cloud-upload</v-icon> Archivage
                         </v-tab>
@@ -192,13 +191,7 @@ const logout = () => {
                         </v-tab>
                     </v-tabs>
 
-                    <!-- Division : seulement le Dashboard -->
-                    <v-tabs v-else :model-value="currentPage" align-tabs="title" color="yellow-accent-4"
-                        slider-color="yellow-accent-4">
-                        <v-tab value="Dashboard" :tag="Link" :href="route('dashboard')">
-                            <v-icon start>mdi-view-dashboard</v-icon> Dashboard
-                        </v-tab>
-                    </v-tabs>
+
                 </template>
             </v-toolbar>
         </v-card>

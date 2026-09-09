@@ -35,8 +35,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::delete('/profile', 'destroy')->name('profile.destroy');
     });
 
-    // STATS : accessible à tous SAUF Division
-    Route::middleware(['role:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN])
+    // STATS : accessible à tous
+    Route::middleware(['role:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN . ',' . User::ROLE_DIVISION])
         ->group(function () {
             Route::get('/stats', [StatsController::class, 'index'])->name('stats');
         });
@@ -56,19 +56,26 @@ Route::middleware(['auth', 'verified'])->group(function () {
 });
 
 // ============================================
+// ROUTES ACCESSIBLES À TOUS (Y COMPRIS DIVISION)
+// ============================================
+Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN . ',' . User::ROLE_DIVISION])
+    ->group(function () {
+        Route::get('/archives', [ArchiveController::class, 'index'])->name('archives.index');
+        Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
+    });
+
+// ============================================
 // ROUTES ACCESSIBLES À ARCHIVISTE, GESTIONNAIRE ET ADMIN (RÔLE 1, 2, 3)
 // ============================================
 Route::middleware(['auth', 'verified', 'role:' . User::ROLE_ARCHIVISTE . ',' . User::ROLE_GESTIONNAIRE . ',' . User::ROLE_ADMIN])
     ->group(function () {
         // IMPORTANT : les routes statiques avant les routes dynamiques {archive}
-        Route::get('/archives/export', [ArchiveController::class, 'export'])->name('archives.export');
         Route::post('/archives/bulk', [ArchiveController::class, 'storeMultiple'])->name('archives.store.multiple');
 
         // ROUTE POUR LA VÉRIFICATION DES DOUBLONS
         Route::post('/archives/check-duplicates', [ArchiveController::class, 'checkDuplicates'])->name('archives.check-duplicates');
 
         // Routes CRUD pour les archives
-        Route::get('/archives', [ArchiveController::class, 'index'])->name('archives.index');
         Route::post('/archives', [ArchiveController::class, 'store'])->name('archives.store');
         Route::put('/archives/{archive}', [ArchiveController::class, 'update'])->name('archives.update');
         Route::delete('/archives/{archive}', [ArchiveController::class, 'destroy'])->name('archives.destroy');
